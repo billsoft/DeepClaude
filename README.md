@@ -63,14 +63,12 @@ cd DeepClaude
 Step 2. 通过 uv 安装依赖（如果你还没有安装 uv，请看下方注解）
 
 ```bash
-# 通过 uv 在本地创建虚拟环境
-uv venv
+# 通过 uv 在本地创建虚拟环境，并安装依赖
+uv sync
 # macOS 激活虚拟环境
 source .venv/bin/activate
 # Windows 激活虚拟环境
 .venv\Scripts\activate
-# 开始安装依赖
-uv pip install -r uv.lock
 ```
 
 Step 3. 配置环境变量
