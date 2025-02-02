@@ -17,7 +17,9 @@
   - [1. 获得运行所需的 API](#1-获得运行所需的-api)
   - [2. 开始运行](#2-开始运行)
 - [Deployment](#deployment)
+  - [一键部署到 Zeabur](#一键部署到-zeabur)
 - [Technology Stack](#technology-stack)
+- [Star History](#star-history)
 - [Buy me a coffee](#buy-me-a-coffee)
 - [About Me](#about-me)
 
@@ -48,7 +50,7 @@
 
 ## 1. 获得运行所需的 API
 
-1. 获取 DeepSeek API，因为最近 DeepSeek 还在遭受攻击，所以经常无法使用，推荐使用 Siliconflow 的效果更好（也可以本地 Ollama 的）: https://cloud.siliconflow.cn/i/RXikvHE2
+1. 获取 DeepSeek API，因为最近 DeepSeek 还在遭受攻击，所以经常无法使用，推荐使用 Siliconflow 的效果更好（也可以本地 Ollama 的）: https://cloud.siliconflow.cn/i/RXikvHE2 (点击此链接可以获得到 2000 万免费 tokens)
 2. 获取 Claude 的 API KEY （目前还没有做中转模式，以及对 Google 和 AWS 托管的版本的兼容支持，欢迎 PR）：https://console.anthropic.com
    注：`但是！大家也可以联系我，我可以为大家提供按量计费的 DeepClaude 的直接 API 服务！微信：geekthings`
 
@@ -99,16 +101,35 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 
 # Deployment
 
-> 项目支持 Docker 服务器部署，可自行调用接入常用的 Chatbox，也可以作为渠道一直，将其视为一个特殊的 `DeepClaude`模型接入到 `OneAPI` 等产品使用。
+> 项目支持 Docker 服务器部署，可自行调用接入常用的 Chatbox，也可以作为渠道一直，将其视为一个特殊的 `DeepClaude`模型接入到 [OneAPI](https://github.com/songquanpeng/one-api) 等产品使用。
 
-以 Dokploy 部署为例，也推荐 Zeabur 和 Railway。
 
-更新中... 预计一天内完成更新（肩膀真的太酸了）
+
+<details>
+  <summary><strong>一键部署到 Zeabur</strong></summary> 
+  <div>
+    > 因为要调用 Claude 的 API，请勿选择香港区域的服务器，推荐新加坡或日本服务器最佳
+    [![Deployed on Zeabur](https://zeabur.com/deployed-on-zeabur-dark.svg)](https://zeabur.com?referralCode=ErlichLiu&utm_source=ErlichLiu)
+		1. 首先 fork 一份代码。
+2. 进入 [Zeabur](https://zeabur.com?referralCode=ErlichLiu&utm_source=ErlichLiu)，登录。
+3. 选择 Create New Project，选择地区为新加坡或日本区域。
+4. 选择项目来源为 Github，搜索框搜索 DeepClaude 后确认，然后点击右下角的 Config。
+5. 在 Environment Variables 区域点击 Add Environment Variables，逐个填写 .env.example 当中的配置，等号左右对应的就是 Environment Variables 里的 Key 和 Value。（注意：ALLOW_API_KEY 是你自己规定的外部访问你的服务时需要填写的 API KEY，可以随意填写，不要有空格）
+6. 全部编辑完成后点击 Next，然后点击 Deploy，静待片刻即可完成部署。
+7. 完成部署后点击当前面板上部的 Networking，点击 Public 区域的 Generate Domain（也可以配置自己的域名），然后输入一个你想要的域名即可（这个完整的 xxx.zeabur.app 将是你接下来在任何开源对话框、Cursor、Roo Code 等产品内填写的 baseUrl）
+8. 接下来就可以去上述所说的任何的项目里去配置使用你的 API 了，也可以配置到 One API，作为一个 OpenAI 渠道使用。（晚点会补充这部分的配置方法）
+  </div>
+
+</details>
 
 # Technology Stack
 - [FastAPI](https://fastapi.tiangolo.com/)
 - [UV as package manager](https://docs.astral.sh/uv/#project-management)
 - [Docker](https://www.docker.com/)
+
+# Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ErlichLiu/DeepClaude&type=Date)](https://star-history.com/#ErlichLiu/DeepClaude&Date)
 
 # Buy me a coffee
 <img src="https://img.erlich.fun/personal-blog/uPic/IMG_3625.JPG" alt="微信赞赏码" style="width: 200px;"/>
@@ -116,4 +137,3 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 # About Me
 - Email: erlichliu@gmail.com
 - Website: [Erlichliu](https://erlich.fun)
-  
