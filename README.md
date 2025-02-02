@@ -8,6 +8,10 @@
 
 </div>
 
+<div>
+<h3> 特别说明：对于不太会部署，只是希望使用上最强 DeepClaude 组合的朋友，请直接链接 Erlich（微信：geekthings）购买按量付费的 API 即可，国内可以直接访问 </h3>
+</div>
+
 # Table of Contents
 
 - [Table of Contents](#table-of-contents)
@@ -17,7 +21,6 @@
   - [1. 获得运行所需的 API](#1-获得运行所需的-api)
   - [2. 开始运行](#2-开始运行)
 - [Deployment](#deployment)
-  - [一键部署到 Zeabur](#一键部署到-zeabur)
 - [Technology Stack](#technology-stack)
 - [Star History](#star-history)
 - [Buy me a coffee](#buy-me-a-coffee)
@@ -111,7 +114,7 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 
 
 [![Deployed on Zeabur](https://zeabur.com/deployed-on-zeabur-dark.svg)](https://zeabur.com?referralCode=ErlichLiu&utm_source=ErlichLiu)
-   
+
  1. 首先 fork 一份代码。
  2. 进入 [Zeabur](https://zeabur.com?referralCode=ErlichLiu&utm_source=ErlichLiu)，登录。
  3. 选择 Create New Project，选择地区为新加坡或日本区域。
@@ -133,7 +136,7 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 [![Star History Chart](https://api.star-history.com/svg?repos=ErlichLiu/DeepClaude&type=Date)](https://star-history.com/#ErlichLiu/DeepClaude&Date)
 
 # Buy me a coffee
-<img src="https://img.erlich.fun/personal-blog/uPic/IMG_3625.JPG" alt="微信赞赏码" style="width: 200px;"/>
+<img src="https://img.erlich.fun/personal-blog/uPic/IMG_3625.JPG" alt="微信赞赏码" style="width: 400px;"/>
 
 # About Me
 - Email: erlichliu@gmail.com
