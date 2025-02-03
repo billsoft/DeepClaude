@@ -30,6 +30,7 @@ class ClaudeClient(BaseClient):
                 内容: 实际的文本内容
         """
         if self.is_openrouter:
+            logger.info("使用 OpenRouter API 作为 Claude 3.5 Sonnet 供应商 ")
             # 转换模型名称为 OpenRouter 格式
             model = "anthropic/claude-3.5-sonnet"
                 
@@ -46,6 +47,7 @@ class ClaudeClient(BaseClient):
                 "stream": True
             }
         else:
+            logger.info("使用 Anthropic API 作为 Claude 3.5 Sonnet 供应商 ")
             headers = {
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01",
