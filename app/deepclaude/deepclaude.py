@@ -13,7 +13,7 @@ class DeepClaude:
     def __init__(self, deepseek_api_key: str, claude_api_key: str, 
                  deepseek_api_url: str = "https://api.deepseek.com/v1/chat/completions", 
                  claude_api_url: str = "https://api.anthropic.com/v1/messages",
-                 is_openrouter: bool = False):
+                 claude_provider: str = "anthropic"):
         """初始化 API 客户端
         
         Args:
@@ -21,7 +21,7 @@ class DeepClaude:
             claude_api_key: Claude API密钥
         """
         self.deepseek_client = DeepSeekClient(deepseek_api_key, deepseek_api_url)
-        self.claude_client = ClaudeClient(claude_api_key, claude_api_url, is_openrouter)
+        self.claude_client = ClaudeClient(claude_api_key, claude_api_url, claude_provider)
     
     async def chat_completions_with_stream(self, messages: list, 
                                          deepseek_model: str = "deepseek-reasoner",
