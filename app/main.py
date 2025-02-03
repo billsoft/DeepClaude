@@ -6,6 +6,7 @@ load_dotenv()
 
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from app.utils.logger import logger
 from app.utils.auth import verify_api_key
 from app.deepclaude.deepclaude import DeepClaude
@@ -13,7 +14,9 @@ import os
 
 app = FastAPI(title="DeepClaude API")
 
-# 从环境变量获取 API 密钥、地址以及模型名称
+# 从环境变量获取 CORS配置, API 密钥、地址以及模型名称
+ALLOW_ORIGINS = os.getenv("ALLOW_ORIGINS", "*")
+
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL")
 # USE_OPENROUTER = os.getenv("USE_OPENROUTER", "false").lower() == "true"
@@ -23,6 +26,17 @@ CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messa
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL")
+
+# CORS设置
+allow_origins_list = ALLOW_ORIGINS.split(",") if ALLOW_ORIGINS else [] # 将逗号分隔的字符串转换为列表
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 验证日志级别
 logger.debug("当前日志级别为 DEBUG")
