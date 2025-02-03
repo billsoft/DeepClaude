@@ -38,7 +38,7 @@ class DeepSeekClient(BaseClient):
         else:
             return True, content
             
-    async def stream_chat(self, messages: list, model: str = "deepseek-reasoner") -> AsyncGenerator[tuple[str, str], None]:
+    async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1") -> AsyncGenerator[tuple[str, str], None]:
         """流式对话
         
         Args:
