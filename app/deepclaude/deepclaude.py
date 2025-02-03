@@ -60,6 +60,7 @@ class DeepClaude:
         reasoning_content = []
         
         async def process_deepseek():
+            logger.info(f"开始处理 DeepSeek 流，使用模型：{deepseek_model}")
             try:
                 async for content_type, content in self.deepseek_client.stream_chat(messages, deepseek_model):
                     if content_type == "reasoning":
@@ -81,17 +82,21 @@ class DeepClaude:
                         await output_queue.put(f"data: {json.dumps(response)}\n\n".encode('utf-8'))
                     elif content_type == "content":
                         # 当收到 content 类型时，将完整的推理内容发送到 claude_queue，并结束 DeepSeek 流处理
+                        logger.info(f"DeepSeek 推理完成，收集到的推理内容长度：{len(''.join(reasoning_content))}")
                         await claude_queue.put("".join(reasoning_content))
                         break
             except Exception as e:
                 logger.error(f"处理 DeepSeek 流时发生错误: {e}")
                 await claude_queue.put("")
             # 用 None 标记 DeepSeek 任务结束
+            logger.info("DeepSeek 任务处理完成，标记结束")
             await output_queue.put(None)
         
         async def process_claude():
             try:
+                logger.info("等待获取 DeepSeek 的推理内容...")
                 reasoning = await claude_queue.get()
+                logger.debug(f"获取到推理内容，内容长度：{len(reasoning) if reasoning else 0}")
                 if not reasoning:
                     logger.error("未能获取到有效的推理内容")
                     # 标记 Claude 任务结束
