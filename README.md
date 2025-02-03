@@ -12,6 +12,15 @@
 <h3 style="color: #FF9909"> 特别说明：对于不太会部署，只是希望使用上最强 DeepClaude 组合的朋友，请直接链接 Erlich（微信：geekthings）购买按量付费的 API 即可，国内可以直接访问 </h3>
 </div>
 
+<details>
+<summary><strong>更新日志：</strong></summary> 
+<div>
+2025-02-03.2: 由于 deepseek r1 在某种程度上已经开启了一个规范，所以我们也遵循推理标注的这种规范，更好适配支持的更好的 Cherry Studio 等软件。
+2025-02-03.1: Siliconflow 的 DeepSeek R1 返回结构变更，支持新的返回结构
+
+</div>
+</details>
+
 # Table of Contents
 
 - [Table of Contents](#table-of-contents)

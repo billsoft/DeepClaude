@@ -61,6 +61,8 @@ class DeepSeekClient(BaseClient):
             "stream": True,
         }
         
+        logger.debug(f"开始流式对话：{data}")
+
         accumulated_content = ""
         is_collecting_think = False
         
@@ -79,7 +81,7 @@ class DeepSeekClient(BaseClient):
                         if data and data.get("choices") and data["choices"][0].get("delta"):
                             delta = data["choices"][0]["delta"]
                             
-                            if model == "deepseek-reasoner":
+                            if model == "deepseek-reasoner" or model == "deepseek-ai/DeepSeek-R1":
                                 # 处理 reasoning_content
                                 if delta.get("reasoning_content"):
                                     content = delta["reasoning_content"]
@@ -101,11 +103,13 @@ class DeepSeekClient(BaseClient):
                                     
                                     if "<think>" in content and not is_collecting_think:
                                         # 开始收集推理内容
+                                        logger.debug(f"开始收集推理内容：{content}")
                                         is_collecting_think = True
                                         yield "reasoning", content
                                     elif is_collecting_think:
                                         if "</think>" in content:
                                             # 推理内容结束
+                                            logger.debug(f"推理内容结束：{content}")
                                             is_collecting_think = False
                                             yield "reasoning", content
                                             # 输出空的 content 来触发 Claude 处理

@@ -1,3 +1,9 @@
+import os
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
+
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import StreamingResponse
 from app.utils.logger import logger
@@ -16,6 +22,10 @@ CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messa
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL")
+
+# 验证日志级别
+logger.debug("当前日志级别为 DEBUG")
+logger.info("开始请求")
 
 @app.get("/", dependencies=[Depends(verify_api_key)])
 async def root():
