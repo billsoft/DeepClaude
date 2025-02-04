@@ -24,6 +24,7 @@ CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messa
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL")
+DEEPSEEK_PROVIDER = os.getenv("DEEPSEEK_PROVIDER", "deepseek") # R1模型提供商, 默认为deepseek
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL")
 
 IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "True")
