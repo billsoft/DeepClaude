@@ -19,7 +19,6 @@ ALLOW_ORIGINS = os.getenv("ALLOW_ORIGINS", "*")
 
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL")
-# USE_OPENROUTER = os.getenv("USE_OPENROUTER", "false").lower() == "true"
 CLAUDE_PROVIDER = os.getenv("CLAUDE_PROVIDER", "anthropic") # Claude模型提供商, 默认为anthropic
 CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
 
