@@ -103,10 +103,8 @@ class DeepClaude:
                 reasoning = await claude_queue.get()
                 logger.debug(f"获取到推理内容，内容长度：{len(reasoning) if reasoning else 0}")
                 if not reasoning:
-                    logger.error("未能获取到有效的推理内容")
-                    # 标记 Claude 任务结束
-                    await output_queue.put(None)
-                    return
+                    logger.warning("未能获取到有效的推理内容，将使用默认提示继续")
+                    reasoning = "获取推理内容失败"
                 # 构造 Claude 的输入消息
                 claude_messages = messages.copy()
                 claude_messages.append({
