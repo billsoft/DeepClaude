@@ -12,14 +12,21 @@
 <h3 style="color: #FF9909"> 特别说明：对于不太会部署，只是希望使用上最强 DeepClaude 组合的朋友，请直接链接 Erlich（微信：geekthings）购买按量付费的 API 即可，国内可以直接访问 </h3>
 </div>
 
+---
+
 <details>
 <summary><strong>更新日志：</strong></summary> 
 <div>
 2025-02-05.1: 支持通过环境变量配置是否是原生支持推理字段的模型，满血版本通常支持
+
 2025-02-04.2: 支持跨域配置，可在 .env 中配置
+
 2025-02-04.1: 支持 Openrouter 以及 OneAPI 等中转服务商作为 Claude 部分的供应商
+
 2025-02-03.3: 支持 OpenRouter 作为 Claude 的供应商，详见 .env.example 说明
+
 2025-02-03.2: 由于 deepseek r1 在某种程度上已经开启了一个规范，所以我们也遵循推理标注的这种规范，更好适配支持的更好的 Cherry Studio 等软件。
+
 2025-02-03.1: Siliconflow 的 DeepSeek R1 返回结构变更，支持新的返回结构
 
 </div>
