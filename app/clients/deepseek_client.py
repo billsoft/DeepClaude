@@ -38,7 +38,7 @@ class DeepSeekClient(BaseClient):
         else:
             return True, content
             
-    async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1") -> AsyncGenerator[tuple[str, str], None]:
+    async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
         """流式对话
         
         Args:
@@ -81,7 +81,7 @@ class DeepSeekClient(BaseClient):
                         if data and data.get("choices") and data["choices"][0].get("delta"):
                             delta = data["choices"][0]["delta"]
                             
-                            if model == "deepseek-reasoner" or model == "deepseek-ai/DeepSeek-R1":
+                            if is_origin_reasoning:
                                 # 处理 reasoning_content
                                 if delta.get("reasoning_content"):
                                     content = delta["reasoning_content"]
