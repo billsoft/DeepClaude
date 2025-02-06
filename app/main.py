@@ -26,7 +26,7 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL")
 
-IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "True")
+IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
 
 # CORS设置
 allow_origins_list = ALLOW_ORIGINS.split(",") if ALLOW_ORIGINS else [] # 将逗号分隔的字符串转换为列表

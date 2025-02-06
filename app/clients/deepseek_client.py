@@ -96,6 +96,9 @@ class DeepSeekClient(BaseClient):
                                 # 处理其他模型的输出
                                 if delta.get("content"):
                                     content = delta["content"]
+                                    if content == "":  # 只跳过完全空的字符串
+                                        continue
+                                    logger.debug(f"非原生推理内容：{content}")
                                     accumulated_content += content
                                     
                                     # 检查累积的内容是否包含完整的 think 标签对
