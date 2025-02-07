@@ -17,6 +17,8 @@
 <details>
 <summary><strong>更新日志：</strong></summary> 
 <div>
+2025-02-07.2: 修复 Claude temperature 参数可能会超过范围导致的请求失败的 bug
+
 2025-02-07.1: 支持 Claude temputerature 等参数；添加更详细的 .env.example 说明
 
 2025-02-06.1：修复非原生推理模型无法获得到推理内容的 bug

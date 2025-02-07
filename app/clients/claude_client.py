@@ -52,7 +52,7 @@ class ClaudeClient(BaseClient):
                 "model": model,  # OpenRouter 使用 anthropic/claude-3.5-sonnet 格式
                 "messages": messages,
                 "stream": True,
-                "temperature": model_arg[0],
+                "temperature": 1 if model_arg[0] < 0 or model_arg[0] > 1 else model_arg[0],
                 "top_p": model_arg[1],
                 "presence_penalty": model_arg[2],
                 "frequency_penalty": model_arg[3]
@@ -68,7 +68,7 @@ class ClaudeClient(BaseClient):
                 "model": model,
                 "messages": messages,
                 "stream": True,
-                "temperature": model_arg[0],
+                "temperature": 1 if model_arg[0] < 0 or model_arg[0] > 1 else model_arg[0],
                 "top_p": model_arg[1],
                 "presence_penalty": model_arg[2],
                 "frequency_penalty": model_arg[3]
@@ -87,7 +87,7 @@ class ClaudeClient(BaseClient):
                 "messages": messages,
                 "max_tokens": 8192,
                 "stream": True,
-                "temperature": model_arg[0], # Claude仅支持temperature与top_p
+                "temperature": 1 if model_arg[0] < 0 or model_arg[0] > 1 else model_arg[0], # Claude仅支持temperature与top_p
                 "top_p": model_arg[1]
             }
         else:
