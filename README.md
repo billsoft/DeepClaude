@@ -141,17 +141,26 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 
 2. **运行 Docker 容器**
 
-   运行构建好的 Docker 镜像，将容器的 8000 端口映射到宿主机的 8000 端口。 环境变量的配置建议通过 `.env` 文件进行管理，创建 `.env` 文件并将 `.env.example` 中的配置项复制到 `.env` 文件中，根据你的实际情况修改 `.env` 文件中的配置项。
+   运行构建好的 Docker 镜像，将容器的 8000 端口映射到宿主机的 8000 端口。同时，通过 `-e` 参数设置必要的环境变量，包括 API 密钥、允许的域名等。请根据 `.env.example` 文件中的说明配置环境变量。
 
    ```bash
    docker run -d \
        -p 8000:8000 \
-       --env-file .env \
+       -e ALLOW_API_KEY=your_allow_api_key \
+       -e ALLOW_ORIGINS="*" \
+       -e DEEPSEEK_API_KEY=your_deepseek_api_key \
+       -e DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions \
+       -e DEEPSEEK_MODEL=deepseek-reasoner \
+       -e CLAUDE_API_KEY=your_claude_api_key \
+       -e CLAUDE_MODEL=claude-3-5-sonnet-20241022 \
+       -e CLAUDE_PROVIDER=anthropic \
+       -e CLAUDE_API_URL=https://api.anthropic.com/v1/messages \
+       -e LOG_LEVEL=INFO \
        --restart always \
        deepclaude:latest
    ```
 
-   请确保 `.env` 文件中包含了 `ALLOW_API_KEY`, `ALLOW_ORIGINS`, `DEEPSEEK_API_KEY`, `DEEPSEEK_API_URL`, `DEEPSEEK_MODEL`, `IS_ORIGIN_REASONING`, `CLAUDE_API_KEY`, `CLAUDE_MODEL`, `CLAUDE_PROVIDER`, `CLAUDE_API_URL`, 和 `LOG_LEVEL` 等环境变量的配置。  `ALLOW_ORIGINS` 请设置为允许访问的域名，如 `"http://localhost:3000,https://chat.example.com"` 或 `"*"` 表示允许所有来源。
+   请替换上述命令中的 `your_allow_api_key`，`your_allow_origins`，`your_deepseek_api_key` 和 `your_claude_api_key` 为你实际的 API 密钥和配置。`ALLOW_ORIGINS` 请设置为允许访问的域名，如 `"http://localhost:3000,https://chat.example.com"` 或 `"*"` 表示允许所有来源。
 
    **使用 docker-compose 部署**
 
@@ -159,7 +168,7 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 
    1. 确保已安装 Docker Compose。
    2. 复制 `docker-compose.yml` 文件到项目根目录。
-   3. 修改 `.env` 文件中的环境变量配置，将 `.env.example` 文件中的配置项复制到 `.env` 文件中，并根据你的实际情况修改 `.env` 文件。
+   3. 修改 `docker-compose.yml` 文件中的环境变量配置，将 `your_allow_api_key`，`your_allow_origins`，`your_deepseek_api_key` 和 `your_claude_api_key` 替换为你的实际配置。
    4. 在项目根目录下运行 Docker Compose 命令启动服务：
 
       ```bash
