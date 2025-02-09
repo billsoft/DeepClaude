@@ -17,6 +17,8 @@
 <details>
 <summary><strong>更新日志：</strong></summary> 
 <div>
+2025-02-08.2: 支持非流式请求，支持 OpenAI 兼容的 models 接口返回。（⚠️ 当前暂未实现正确的 tokens 消耗统计，稍后更新）
+
 2025-02-08.1: 添加 Github Actions，支持 fork 自动同步、支持自动构建 Docker 最新镜像、支持 docker-compose 部署
 
 2025-02-07.2: 修复 Claude temperature 参数可能会超过范围导致的请求失败的 bug
