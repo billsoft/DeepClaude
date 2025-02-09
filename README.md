@@ -49,8 +49,11 @@
   - [1. 获得运行所需的 API](#1-获得运行所需的-api)
   - [2. 开始运行（本地运行）](#2-开始运行本地运行)
 - [Deployment](#deployment)
+  - [Railway 一键部署（推荐）](#railway-一键部署推荐)
+  - [Zeabur 一键部署(一定概率下会遇到 Domain 生成问题，需要重新创建 project 部署)](#zeabur-一键部署一定概率下会遇到-domain-生成问题需要重新创建-project-部署)
+  - [使用 docker-compose 部署（Docker 镜像将随着 main 分支自动更新到最新）](#使用-docker-compose-部署docker-镜像将随着-main-分支自动更新到最新)
   - [Docker 部署（自行 Build）](#docker-部署自行-build)
-  - [使用 docker-compose 部署](#使用-docker-compose-部署)
+- [Automatic fork sync](#automatic-fork-sync)
 - [Technology Stack](#technology-stack)
 - [Star History](#star-history)
 - [Buy me a coffee](#buy-me-a-coffee)
@@ -135,6 +138,89 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 
 > 项目支持 Docker 服务器部署，可自行调用接入常用的 Chatbox，也可以作为渠道一直，将其视为一个特殊的 `DeepClaude`模型接入到 [OneAPI](https://github.com/songquanpeng/one-api) 等产品使用。
 
+## Railway 一键部署（推荐）
+<details>
+<summary><strong>一键部署到 Railway</strong></summary> 
+
+<div>
+1. 首先 fork 一份代码。
+
+2. 点击打开 Railway 主页：https://railway.com?referralCode=RNTGCA
+   
+3. 点击 `Deploy a new project`
+![image-20250209164454358](https://img.erlich.fun/personal-blog/uPic/image-20250209164454358.png)
+
+4. 点击 `Deploy from GitHub repo`
+![image-20250209164638713](https://img.erlich.fun/personal-blog/uPic/image-20250209164638713.png)
+
+5. 点击 `Login with GitHub`
+![image-20250209164843566](https://img.erlich.fun/personal-blog/uPic/image-20250209164843566.png)
+
+6. 选择升级，选择只需 5 美金的 Hobby Plan 即可 
+![image-20250209165034070](https://img.erlich.fun/personal-blog/uPic/image-20250209165034070.png)
+![image-20250209165108355](https://img.erlich.fun/personal-blog/uPic/image-20250209165108355.png)
+
+1. 点击 `Create a New Project`
+![create-a-new-project](https://img.erlich.fun/personal-blog/uPic/rvfGTE.png)
+
+1. 继续选择 `Deploy from GitHub repo`
+![image-20250209164638713](https://img.erlich.fun/personal-blog/uPic/image-20250209164638713.png)
+
+1. 输入框内搜索`DeepClaude`，选中后点击。
+![deploy-from-github-repo](https://img.erlich.fun/personal-blog/uPic/ihOzXU.png)
+
+1.  选择`Variable`，并点击`New Variable` 按钮，按照环境变量内的键值对进行填写
+![variable](https://img.erlich.fun/personal-blog/uPic/VrZgxp.png)
+
+1.  填写完成后重新点击 `Deploy` 按钮，等待数秒后即可完成部署
+![deploy](https://img.erlich.fun/personal-blog/uPic/5kvkLI.png)
+
+1.  部署完成后，点击 `Settings` 按钮，然后向下查看到 `Networking` 区域，然后选择 `Generate Domain`，并输入 `8000` 作为端口号
+![networking](https://img.erlich.fun/personal-blog/uPic/PQyAtG.png)
+![generate-domain](https://img.erlich.fun/personal-blog/uPic/i5JnX8.png)
+![port](https://img.erlich.fun/personal-blog/uPic/ZEwxRm.png)
+
+1.  接下来就可以在你喜欢的 Chatbox 内配置使用或作为 API 使用了
+![using](https://img.erlich.fun/personal-blog/uPic/hD8V6e.png)
+
+</div>
+</details>
+
+## Zeabur 一键部署(一定概率下会遇到 Domain 生成问题，需要重新创建 project 部署)
+<details>
+<summary><strong>一键部署到 Zeabur</strong></summary> 
+<div>
+
+
+[![Deployed on Zeabur](https://zeabur.com/deployed-on-zeabur-dark.svg)](https://zeabur.com?referralCode=ErlichLiu&utm_source=ErlichLiu)
+
+ 1. 首先 fork 一份代码。
+ 2. 进入 [Zeabur](https://zeabur.com?referralCode=ErlichLiu&utm_source=ErlichLiu)，登录。
+ 3. 选择 Create New Project，选择地区为新加坡或日本区域。
+ 4. 选择项目来源为 Github，搜索框搜索 DeepClaude 后确认，然后点击右下角的 Config。
+ 5. 在 Environment Variables 区域点击 Add Environment Variables，逐个填写 .env.example 当中的配置，等号左右对应的就是 Environment Variables 里的 Key 和 Value。（注意：ALLOW_API_KEY 是你自己规定的外部访问你的服务时需要填写的 API KEY，可以随意填写，不要有空格）
+ 6. 全部编辑完成后点击 Next，然后点击 Deploy，静待片刻即可完成部署。
+ 7. 完成部署后点击当前面板上部的 Networking，点击 Public 区域的 Generate Domain（也可以配置自己的域名），然后输入一个你想要的域名即可（这个完整的 xxx.zeabur.app 将是你接下来在任何开源对话框、Cursor、Roo Code 等产品内填写的 baseUrl）
+ 8. 接下来就可以去上述所说的任何的项目里去配置使用你的 API 了，也可以配置到 One API，作为一个 OpenAI 渠道使用。（晚点会补充这部分的配置方法）
+</div>
+</details>
+
+## 使用 docker-compose 部署（Docker 镜像将随着 main 分支自动更新到最新）
+
+   推荐可以使用 `docker-compose.yml` 文件进行部署，更加方便快捷。
+
+   1. 确保已安装 Docker Compose。
+   2. 复制 `docker-compose.yml` 文件到项目根目录。
+   3. 修改 `docker-compose.yml` 文件中的环境变量配置，将 `your_allow_api_key`，`your_allow_origins`，`your_deepseek_api_key` 和 `your_claude_api_key` 替换为你的实际配置。
+   4. 在项目根目录下运行 Docker Compose 命令启动服务：
+
+      ```bash
+      docker-compose up -d
+      ```
+
+   服务启动后，DeepClaude API 将在 `http://宿主机IP:8000/v1/chat/completions` 上进行访问。
+
+
 ## Docker 部署（自行 Build）
 
 1. **构建 Docker 镜像**
@@ -169,38 +255,10 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 
    请替换上述命令中的 `your_allow_api_key`，`your_allow_origins`，`your_deepseek_api_key` 和 `your_claude_api_key` 为你实际的 API 密钥和配置。`ALLOW_ORIGINS` 请设置为允许访问的域名，如 `"http://localhost:3000,https://chat.example.com"` 或 `"*"` 表示允许所有来源。
 
-## 使用 docker-compose 部署
 
-   推荐可以使用 `docker-compose.yml` 文件进行部署，更加方便快捷。
+# Automatic fork sync
+项目已经支持 Github Actions 自动更新 fork 项目的代码，保持你的 fork 版本与当前 main 分支保持一致。如需开启，请 frok 后在 Settings 中开启 Actions 权限即可。
 
-   1. 确保已安装 Docker Compose。
-   2. 复制 `docker-compose.yml` 文件到项目根目录。
-   3. 修改 `docker-compose.yml` 文件中的环境变量配置，将 `your_allow_api_key`，`your_allow_origins`，`your_deepseek_api_key` 和 `your_claude_api_key` 替换为你的实际配置。
-   4. 在项目根目录下运行 Docker Compose 命令启动服务：
-
-      ```bash
-      docker-compose up -d
-      ```
-
-   服务启动后，DeepClaude API 将在 `http://宿主机IP:8000/v1/chat/completions` 上进行访问。
-
-<details>
-<summary><strong>一键部署到 Zeabur</strong></summary> 
-<div>
-
-
-[![Deployed on Zeabur](https://zeabur.com/deployed-on-zeabur-dark.svg)](https://zeabur.com?referralCode=ErlichLiu&utm_source=ErlichLiu)
-
- 1. 首先 fork 一份代码。
- 2. 进入 [Zeabur](https://zeabur.com?referralCode=ErlichLiu&utm_source=ErlichLiu)，登录。
- 3. 选择 Create New Project，选择地区为新加坡或日本区域。
- 4. 选择项目来源为 Github，搜索框搜索 DeepClaude 后确认，然后点击右下角的 Config。
- 5. 在 Environment Variables 区域点击 Add Environment Variables，逐个填写 .env.example 当中的配置，等号左右对应的就是 Environment Variables 里的 Key 和 Value。（注意：ALLOW_API_KEY 是你自己规定的外部访问你的服务时需要填写的 API KEY，可以随意填写，不要有空格）
- 6. 全部编辑完成后点击 Next，然后点击 Deploy，静待片刻即可完成部署。
- 7. 完成部署后点击当前面板上部的 Networking，点击 Public 区域的 Generate Domain（也可以配置自己的域名），然后输入一个你想要的域名即可（这个完整的 xxx.zeabur.app 将是你接下来在任何开源对话框、Cursor、Roo Code 等产品内填写的 baseUrl）
- 8. 接下来就可以去上述所说的任何的项目里去配置使用你的 API 了，也可以配置到 One API，作为一个 OpenAI 渠道使用。（晚点会补充这部分的配置方法）
-</div>
-</details>
 
 # Technology Stack
 - [FastAPI](https://fastapi.tiangolo.com/)
