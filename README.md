@@ -9,7 +9,7 @@
 </div>
 
 <div>
-<h3 style="color: #FF9909"> 特别说明：对于不太会部署，只是希望使用上最强 DeepClaude 组合的朋友，请直接链接 Erlich（微信：geekthings）购买按量付费的 API 即可，国内可以直接访问 </h3>
+<h3 style="color: #FF9909"> 特别说明：对于不太会部署，只是希望使用上最强 DeepClaude 组合的朋友，请直接联系 Erlich（微信：geekthings）购买按量付费的 API 即可，国内可以直接访问 </h3>
 </div>
 
 ---
@@ -17,6 +17,8 @@
 <details>
 <summary><strong>更新日志：</strong></summary> 
 <div>
+2025-02-08.1: 添加 Github Actions，支持 fork 自动同步、支持自动构建 Docker 最新镜像、支持 docker-compose 部署
+
 2025-02-07.2: 修复 Claude temperature 参数可能会超过范围导致的请求失败的 bug
 
 2025-02-07.1: 支持 Claude temputerature 等参数；添加更详细的 .env.example 说明
@@ -45,8 +47,10 @@
 - [Implementation](#implementation)
 - [How to run](#how-to-run)
   - [1. 获得运行所需的 API](#1-获得运行所需的-api)
-  - [2. 开始运行](#2-开始运行)
+  - [2. 开始运行（本地运行）](#2-开始运行本地运行)
 - [Deployment](#deployment)
+  - [Docker 部署（自行 Build）](#docker-部署自行-build)
+  - [使用 docker-compose 部署](#使用-docker-compose-部署)
 - [Technology Stack](#technology-stack)
 - [Star History](#star-history)
 - [Buy me a coffee](#buy-me-a-coffee)
@@ -81,9 +85,8 @@
 
 1. 获取 DeepSeek API，因为最近 DeepSeek 还在遭受攻击，所以经常无法使用，推荐使用 Siliconflow 的效果更好（也可以本地 Ollama 的）: https://cloud.siliconflow.cn/i/RXikvHE2 (点击此链接可以获得到 2000 万免费 tokens)
 2. 获取 Claude 的 API KEY （目前还没有做中转模式，以及对 Google 和 AWS 托管的版本的兼容支持，欢迎 PR）：https://console.anthropic.com
-   注：`但是！大家也可以联系我，我可以为大家提供按量计费的 DeepClaude 的直接 API 服务！微信：geekthings`
 
-## 2. 开始运行
+## 2. 开始运行（本地运行）
 Step 1. 克隆本项目到适合的文件夹并进入项目
 
 ```bash
@@ -124,14 +127,15 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 # 通常 baseUrl 为：http://127.0.0.1:8000/v1
 ```
 
-**注：本项目采用 uv 作为包管理器，这是一个更快速更现代的管理方式，用于替代 pip，你可以[在此了解更多](https://docs.astral.sh/uv/)****
+**注：本项目采用 uv 作为包管理器，这是一个更快速更现代的管理方式，用于替代 pip，你可以[在此了解更多](https://docs.astral.sh/uv/)**
+
 
 
 # Deployment
 
 > 项目支持 Docker 服务器部署，可自行调用接入常用的 Chatbox，也可以作为渠道一直，将其视为一个特殊的 `DeepClaude`模型接入到 [OneAPI](https://github.com/songquanpeng/one-api) 等产品使用。
 
-**Docker 部署**
+## Docker 部署（自行 Build）
 
 1. **构建 Docker 镜像**
 
@@ -153,6 +157,7 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
        -e DEEPSEEK_API_KEY=your_deepseek_api_key \
        -e DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions \
        -e DEEPSEEK_MODEL=deepseek-reasoner \
+       -e IS_ORIGIN_REASONING=true \
        -e CLAUDE_API_KEY=your_claude_api_key \
        -e CLAUDE_MODEL=claude-3-5-sonnet-20241022 \
        -e CLAUDE_PROVIDER=anthropic \
@@ -164,9 +169,9 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
 
    请替换上述命令中的 `your_allow_api_key`，`your_allow_origins`，`your_deepseek_api_key` 和 `your_claude_api_key` 为你实际的 API 密钥和配置。`ALLOW_ORIGINS` 请设置为允许访问的域名，如 `"http://localhost:3000,https://chat.example.com"` 或 `"*"` 表示允许所有来源。
 
-   **使用 docker-compose 部署**
+## 使用 docker-compose 部署
 
-   或者，你也可以使用 `docker-compose.yml` 文件进行部署，更加方便快捷。
+   推荐可以使用 `docker-compose.yml` 文件进行部署，更加方便快捷。
 
    1. 确保已安装 Docker Compose。
    2. 复制 `docker-compose.yml` 文件到项目根目录。
@@ -177,7 +182,7 @@ Step 6. 配置程序到你的 Chatbox（推荐 [NextChat](https://nextchat.dev/)
       docker-compose up -d
       ```
 
-   服务启动后，DeepClaude API 将在 `http://宿主机IP:8000/v1/chat/completions`  доступен.
+   服务启动后，DeepClaude API 将在 `http://宿主机IP:8000/v1/chat/completions` 上进行访问。
 
 <details>
 <summary><strong>一键部署到 Zeabur</strong></summary> 
