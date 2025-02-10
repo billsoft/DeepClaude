@@ -199,13 +199,22 @@ class DeepClaude:
         # 2. 构造 Claude 的输入消息
         reasoning = "".join(reasoning_content)
         claude_messages = messages.copy()
-        claude_messages.append({
-            "role": "assistant",
-            "content": f"Here's my reasoning process:\n{reasoning}\n\nBased on this reasoning, I will now provide my response:"
-        })
+
+        combined_content = f"""
+        Here's my another model's reasoning process:\n{reasoning}\n\n
+        Based on this reasoning, provide your response directly to me:"""
+        
+        # 改造最后一个消息对象，判断消息对象是 role = user，然后在这个对象的 content 后追加新的 String
+        last_message = claude_messages[-1]
+        if last_message.get("role", "") == "user":
+            original_content = last_message["content"]
+            fixed_content = f"Here's my original input:\n{original_content}\n\n{combined_content}"
+            last_message["content"] = fixed_content
+
         # 处理可能 messages 内存在 role = system 的情况
         claude_messages = [message for message in claude_messages if message.get("role", "") != "system"]
 
+        logger.debug("claude messages: " + str(claude_messages))
         # 3. 获取 Claude 的非流式响应
         try:
             answer = ""
