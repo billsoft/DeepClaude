@@ -112,10 +112,16 @@ class DeepClaude:
                     reasoning = "获取推理内容失败"
                 # 构造 Claude 的输入消息
                 claude_messages = messages.copy()
-                claude_messages.append({
-                    "role": "assistant",
-                    "content": f"Here's my reasoning process:\n{reasoning}\n\nBased on this reasoning, I will now provide my response:"
-                })
+                combined_content = f"""
+                Here's my another model's reasoning process:\n{reasoning}\n\n
+                Based on this reasoning, provide your response directly to me:"""
+                
+                # 改造最后一个消息对象，判断消息对象是 role = user，然后在这个对象的 content 后追加新的 String
+                last_message = claude_messages[-1]
+                if last_message.get("role", "") == "user":
+                    original_content = last_message["content"]
+                    fixed_content = f"Here's my original input:\n{original_content}\n\n{combined_content}"
+                    last_message["content"] = fixed_content
                 # 处理可能 messages 内存在 role = system 的情况，如果有，则去掉当前这一条的消息对象
                 claude_messages = [message for message in claude_messages if message.get("role", "") != "system"]
 
