@@ -1,6 +1,7 @@
 """DeepClaude 服务，用于协调 DeepSeek 和 Claude API 的调用"""
 import json
 import time
+import tiktoken
 import asyncio
 from typing import AsyncGenerator
 from app.utils.logger import logger
@@ -220,6 +221,12 @@ class DeepClaude:
         # 处理可能 messages 内存在 role = system 的情况
         claude_messages = [message for message in claude_messages if message.get("role", "") != "system"]
 
+        # 拼接所有 content 为一个字符串，计算 token
+        token_content = "\n".join([message.get("content", "") for message in claude_messages])
+        encoding = tiktoken.encoding_for_model("gpt-4o")
+        input_tokens = encoding.encode(token_content)
+        logger.debug(f"输入 Tokens: {len(input_tokens)}")
+
         logger.debug("claude messages: " + str(claude_messages))
         # 3. 获取 Claude 的非流式响应
         try:
@@ -232,6 +239,8 @@ class DeepClaude:
             ):
                 if content_type == "answer":
                     answer += content
+                output_tokens = encoding.encode(answer)
+                logger.debug(f"输出 Tokens: {len(output_tokens)}")
 
             # 4. 构造 OpenAI 格式的响应
             return {
@@ -249,9 +258,9 @@ class DeepClaude:
                     "finish_reason": "stop"
                 }],
                 "usage": {
-                    "prompt_tokens": -1,  # 由于我们无法准确计算 token，暂时使用 -1
-                    "completion_tokens": -1,
-                    "total_tokens": -1
+                    "prompt_tokens": len(input_tokens),
+                    "completion_tokens": len(output_tokens),
+                    "total_tokens": len(input_tokens + output_tokens)
                 }
             }
         except Exception as e:
