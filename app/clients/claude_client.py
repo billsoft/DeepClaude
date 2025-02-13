@@ -1,18 +1,31 @@
-"""Claude API 客户端"""
-import json
-from typing import AsyncGenerator
-from app.utils.logger import logger
-from .base_client import BaseClient
+"""Claude API 客户端
+
+这个模块实现了与Claude API的通信功能，支持多个API提供商（Anthropic原生、OpenRouter、OneAPI）。
+主要功能包括：
+1. 支持不同API提供商的认证和请求格式
+2. 实现流式和非流式的对话功能
+3. 处理不同模型参数和配置
+4. 错误处理和日志记录
+"""
+import json  # 用于JSON数据处理
+from typing import AsyncGenerator  # 异步生成器类型
+from app.utils.logger import logger  # 日志记录器
+from .base_client import BaseClient  # 导入基础客户端类
 
 
 class ClaudeClient(BaseClient):
     def __init__(self, api_key: str, api_url: str = "https://api.anthropic.com/v1/messages", provider: str = "anthropic"):
         """初始化 Claude 客户端
         
+        根据不同的API提供商初始化客户端配置。支持三种提供商：
+        - anthropic: Anthropic官方API
+        - openrouter: OpenRouter代理API
+        - oneapi: OneAPI代理服务
+        
         Args:
-            api_key: Claude API密钥
-            api_url: Claude API地址
-            is_openrouter: 是否使用 OpenRouter API
+            api_key: Claude API密钥，根据provider不同而不同
+            api_url: Claude API地址，默认使用Anthropic官方API地址
+            provider: API提供商，默认为"anthropic"
         """
         super().__init__(api_key, api_url)
         self.provider = provider
@@ -26,16 +39,29 @@ class ClaudeClient(BaseClient):
     ) -> AsyncGenerator[tuple[str, str], None]:
         """流式或非流式对话
         
+        实现与Claude API的对话功能，支持以下特性：
+        1. 支持流式和非流式输出
+        2. 自动适配不同API提供商的请求格式
+        3. 支持自定义模型参数
+        4. 错误处理和日志记录
+        
         Args:
-            messages: 消息列表
+            messages: 消息列表，包含对话历史和当前输入
             model_arg: 模型参数元组[temperature, top_p, presence_penalty, frequency_penalty]
-            model: 模型名称。如果是 OpenRouter, 会自动转换为 'anthropic/claude-3.5-sonnet' 格式
-            stream: 是否使用流式输出，默认为 True
+                - temperature: 温度参数，控制输出的随机性，范围[0,1]
+                - top_p: 核采样参数，控制输出的多样性
+                - presence_penalty: 存在惩罚，降低重复token的概率
+                - frequency_penalty: 频率惩罚，降低高频token的概率
+            model: 模型名称，对于OpenRouter会自动转换为对应格式
+            stream: 是否使用流式输出，默认为True
             
         Yields:
-            tuple[str, str]: (内容类型, 内容)
-                内容类型: "answer"
+            tuple[str, str]: 返回(内容类型, 内容)的元组
+                内容类型: "answer" - 表示模型的回答
                 内容: 实际的文本内容
+        
+        Raises:
+            ValueError: 当提供的API提供商不支持时抛出
         """
 
         if self.provider == "openrouter":
