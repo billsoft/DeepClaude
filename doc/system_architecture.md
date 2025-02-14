@@ -191,3 +191,26 @@ sequenceDiagram
     API-->>APIClient: 返回响应
     APIClient->>APIClient: 响应格式转换
     APIClient-->>DeepClaude: 返回处理结果
+```
+
+### 2.2 技术栈架构
+
+```mermaid
+graph TB
+    subgraph Web服务层
+        A[FastAPI] --> B[Uvicorn]
+        B --> C[ASGI]
+    end
+    
+    subgraph 核心功能层
+        D[DeepClaude Core] --> E[aiohttp]
+        D --> F[tiktoken]
+    end
+    
+    subgraph 工具支持层
+        G[python-dotenv] --> H[环境配置]
+        I[colorlog] --> J[日志系统]
+    end
+    
+    Web服务层 --> 核心功能层
+    核心功能层 --> 工具支持层
