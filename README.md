@@ -9,8 +9,7 @@
 </div>
 
 <div>
-<h3 style="color: #FF9909"> 特别说明：对于不太会部署，只是希望使用上最强 DeepClaude 组合的朋友，可以直接访问 kakadeai 个人网站自助购买按量付费的 API：https://kakadeai.com
-也可以直接联系 kakadeai国内可以直接访问 </h3>
+<h3 style="color: #FF9909"> 特别说明：我在原作者 ErlichLiu/DeepClaude:main 的早起代码基础上进行了大量修改，形成了现在的代码，希望学习多 AI 配合的朋友可以学习我的代码，也可以留言讨论，也欢迎加微信 bill059</h3>
 </div>
 
 ---
