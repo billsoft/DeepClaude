@@ -728,13 +728,3 @@ docker compose exec api flask create-admin
   - 或者 OpenRouter/OneAPI 等中转服务
 - 建议使用HTTPS进行安全通信
 
-# Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=ErlichLiu/DeepClaude&type=Date)](https://star-history.com/#ErlichLiu/DeepClaude&Date)
-
-# Buy me a coffee
-<img src="https://img.erlich.fun/personal-blog/uPic/IMG_3625.JPG" alt="微信赞赏码" style="width: 400px;"/>
-
-# About Me
-- Email: erlichliu@gmail.com
-- Website: [Erlichliu](https://erlich.fun)
