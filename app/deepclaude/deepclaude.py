@@ -25,6 +25,7 @@ import asyncio
 from typing import AsyncGenerator
 from app.utils.logger import logger
 from app.clients import DeepSeekClient, ClaudeClient
+from app.utils.message_processor import MessageProcessor
 
 
 class DeepClaude:
@@ -127,6 +128,20 @@ class DeepClaude:
         2. Claude API调用异常：记录错误并结束处理
         3. 队列操作异常：确保正确关闭和清理
         """
+        # 验证消息序列格式
+        for i in range(1, len(messages)):
+            if messages[i].get("role") == messages[i-1].get("role"):
+                logger.warning(f"检测到连续的{messages[i].get('role')}消息，跳过处理")
+                return
+
+        # 验证并转换消息格式
+        message_processor = MessageProcessor()
+        try:
+            messages = message_processor.convert_to_deepseek_format(messages)
+        except Exception as e:
+            logger.error(f"消息格式转换失败: {e}")
+            return
+
         # 生成唯一的会话ID和时间戳
         chat_id = f"chatcmpl-{hex(int(time.time() * 1000))[2:]}"
         created_time = int(time.time())
