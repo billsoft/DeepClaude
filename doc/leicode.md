@@ -12,6 +12,7 @@
 │   ├── utils/
 │   │   ├── auth.py
 │   │   ├── logger.py
+│   │   ├── message_processor.py
 │   ├── deepclaude/
 │   │   ├── __init__.py
 │   │   ├── deepclaude.py
@@ -440,6 +441,62 @@ def setup_logger(name: str = "DeepClaude") -> logging.Logger:
 logger = setup_logger()```
 ______________________________
 
+## .../utils/message_processor.py
+```python
+from typing import List, Dict
+from app.utils.logger import logger
+class MessageProcessor:
+ @staticmethod
+ def convert_to_deepseek_format(messages: List[Dict]) -> List[Dict]:
+ processed = []
+ temp_content = []
+ current_role = None
+ for msg in messages:
+ role = msg.get("role", "")
+ content = msg.get("content", "")
+ if not content:
+ continue
+ if role == "system":
+ if processed and processed[0]["role"] == "system":
+ processed[0]["content"] += f"\n{content}"
+ else:
+ processed.insert(0, {"role": "system", "content": content})
+ continue
+ if role == current_role:
+ temp_content.append(content)
+ else:
+ if temp_content:
+ processed.append({
+ "role": current_role,
+ "content": "\n".join(temp_content)
+ })
+ temp_content = [content]
+ current_role = role
+ if temp_content:
+ processed.append({
+ "role": current_role,
+ "content": "\n".join(temp_content)
+ })
+ final_messages = []
+ for i, msg in enumerate(processed):
+ if i > 0 and msg["role"] == final_messages[-1]["role"]:
+ if msg["role"] == "user":
+ final_messages.append({"role": "assistant", "content": "请继续。"})
+ else:
+ final_messages.append({"role": "user", "content": "请继续。"})
+ final_messages.append(msg)
+ logger.debug(f"转换后的消息格式: {final_messages}")
+ return final_messages
+ @staticmethod
+ def validate_messages(messages: List[Dict]) -> bool:
+ if not messages:
+ return False
+ for i in range(1, len(messages)):
+ if messages[i]["role"] == messages[i-1]["role"]:
+ return False
+ return True```
+______________________________
+
 ## .../deepclaude/__init__.py
 ```python
 ```
@@ -454,6 +511,7 @@ import asyncio
 from typing import AsyncGenerator
 from app.utils.logger import logger
 from app.clients import DeepSeekClient, ClaudeClient
+from app.utils.message_processor import MessageProcessor
 class DeepClaude:
  def __init__(self, deepseek_api_key: str, claude_api_key: str,
  deepseek_api_url: str = "https://api.deepseek.com/v1/chat/completions",
@@ -470,6 +528,16 @@ class DeepClaude:
  deepseek_model: str = "deepseek-reasoner",
  claude_model: str = "claude-3-5-sonnet-20241022"
  ) -> AsyncGenerator[bytes, None]:
+ for i in range(1, len(messages)):
+ if messages[i].get("role") == messages[i-1].get("role"):
+ logger.warning(f"检测到连续的{messages[i].get('role')}消息，跳过处理")
+ return
+ message_processor = MessageProcessor()
+ try:
+ messages = message_processor.convert_to_deepseek_format(messages)
+ except Exception as e:
+ logger.error(f"消息格式转换失败: {e}")
+ return
  chat_id = f"chatcmpl-{hex(int(time.time() * 1000))[2:]}"
  created_time = int(time.time())
  output_queue = asyncio.Queue()
