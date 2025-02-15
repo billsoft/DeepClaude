@@ -9,7 +9,7 @@
 </div>
 
 <div>
-<h3 style="color: #FF9909"> 特别说明：对于不太会部署，只是希望使用上最强 DeepClaude 组合的朋友，可以直接访问 kakadeai 个人网站自助购买按量付费的 API：https://erlich.fun/deepclaude-pricing
+<h3 style="color: #FF9909"> 特别说明：对于不太会部署，只是希望使用上最强 DeepClaude 组合的朋友，可以直接访问 kakadeai 个人网站自助购买按量付费的 API：https://kakadeai.com
 也可以直接联系 kakadeai国内可以直接访问 </h3>
 </div>
 
