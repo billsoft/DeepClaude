@@ -214,3 +214,140 @@ graph TB
     
     Web服务层 --> 核心功能层
     核心功能层 --> 工具支持层
+```
+
+### 2.3 部署架构
+
+```mermaid
+graph TB
+    subgraph 客户端层
+        A[NextChat] --> D[DeepClaude API]
+        B[ChatBox] --> D
+        C[LobeChat] --> D
+    end
+    
+    subgraph 服务层
+        D --> E[Docker容器]
+        E --> F[FastAPI服务]
+    end
+    
+    subgraph API层
+        F --> G[DeepSeek API]
+        F --> H[Claude API]
+    end
+```
+
+### 2.4 部署流程
+
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant Server
+    participant Docker
+    participant API
+
+    Admin->>Server: 1. 配置服务器环境
+    Admin->>Server: 2. 安装Docker
+    Admin->>Docker: 3. 配置环境变量
+    Docker->>Docker: 4. 启动容器
+    Docker->>API: 5. 验证API连接
+    API-->>Admin: 6. 返回服务状态
+```
+
+## 8. 部署配置
+
+### 8.1 环境变量配置
+
+必要的环境变量配置：
+
+```bash
+# API访问控制
+ALLOW_API_KEY=your_api_key
+ALLOW_ORIGINS="*"
+
+# DeepSeek配置
+DEEPSEEK_API_KEY=your_deepseek_key
+DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions
+DEEPSEEK_MODEL=deepseek-reasoner
+IS_ORIGIN_REASONING=true
+
+# Claude配置
+CLAUDE_API_KEY=your_claude_key
+CLAUDE_MODEL=claude-3-5-sonnet-20241022
+CLAUDE_PROVIDER=anthropic
+CLAUDE_API_URL=https://api.anthropic.com/v1/messages
+
+# 日志配置
+LOG_LEVEL=INFO
+```
+
+### 8.2 Docker部署配置
+
+1. **Docker Compose配置**
+
+```yaml
+version: '3'
+services:
+  deepclaude:
+    image: erlichliu/deepclaude:latest
+    container_name: deepclaude
+    ports:
+      - "8000:8000"
+    environment:
+      - ALLOW_API_KEY=${ALLOW_API_KEY}
+      - ALLOW_ORIGINS=${ALLOW_ORIGINS}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_API_URL=${DEEPSEEK_API_URL}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL}
+      - IS_ORIGIN_REASONING=${IS_ORIGIN_REASONING}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - CLAUDE_MODEL=${CLAUDE_MODEL}
+      - CLAUDE_PROVIDER=${CLAUDE_PROVIDER}
+      - CLAUDE_API_URL=${CLAUDE_API_URL}
+      - LOG_LEVEL=${LOG_LEVEL}
+    restart: always
+```
+
+2. **Nginx配置示例**
+
+```nginx
+server {
+    listen 80;
+    server_name your_domain.com;
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### 8.3 安全配置
+
+1. **API访问控制**
+- 设置ALLOW_API_KEY进行认证
+- 配置ALLOW_ORIGINS限制跨域访问
+
+2. **SSL/TLS配置**
+- 使用Let's Encrypt配置HTTPS
+- 启用SSL证书自动更新
+
+3. **Docker安全配置**
+- 限制容器资源使用
+- 配置容器网络隔离
+- 定期更新镜像
+
+### 8.4 监控和日志
+
+1. **日志配置**
+- 设置LOG_LEVEL控制日志级别
+- 配置日志轮转策略
+
+2. **监控指标**
+- API请求量监控
+- 响应时间监控
+- 错误率监控
+- 资源使用监控

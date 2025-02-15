@@ -1,16 +1,19 @@
-import os
-import sys
-from dotenv import load_dotenv
+# 导入系统相关模块
+import os  # 用于操作系统相关功能，如环境变量读取
+import sys  # 用于系统相关功能，如程序退出
+from dotenv import load_dotenv  # 用于加载.env文件中的环境变量
 
-# 加载环境变量
+# 加载环境变量配置
+# 从.env文件中读取配置，支持本地开发环境和生产环境的配置分离
 load_dotenv()
 
-from fastapi import FastAPI, Depends, Request
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from app.utils.logger import logger
-from app.utils.auth import verify_api_key
-from app.deepclaude.deepclaude import DeepClaude
+# 导入FastAPI相关依赖
+from fastapi import FastAPI, Depends, Request  # FastAPI框架核心组件
+from fastapi.responses import StreamingResponse  # 用于处理流式响应
+from fastapi.middleware.cors import CORSMiddleware  # 处理跨域请求的中间件
+from app.utils.logger import logger  # 日志工具
+from app.utils.auth import verify_api_key  # API密钥验证
+from app.deepclaude.deepclaude import DeepClaude  # DeepClaude核心类
 
 app = FastAPI(title="DeepClaude API")
 
