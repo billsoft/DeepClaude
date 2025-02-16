@@ -2,6 +2,9 @@ import os
 import glob
 from collections import defaultdict
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 def compress_content(content):
     """压缩代码内容，移除不必要的空白但保持基本可读性"""
@@ -318,8 +321,38 @@ def write_compressed_markdown(f, content):
     content = re.sub(r'[ \t]+$', '', content, flags=re.MULTILINE)
     f.write(content)
 
+def backup_leicode_content():
+    """将 leicode.md 的内容备份到 history_code.md"""
+    try:
+        # 确保目录存在
+        os.makedirs('doc', exist_ok=True)
+        
+        leicode_path = 'doc/leicode.md'
+        history_path = 'doc/history_code.md'
+        
+        # 检查 leicode.md 是否存在
+        if not os.path.exists(leicode_path):
+            logger.warning("leicode.md 文件不存在，跳过备份")
+            return
+            
+        # 读取 leicode.md 的内容
+        with open(leicode_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # 将内容写入 history_code.md
+        with open(history_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+            
+        logger.info("成功将 leicode.md 的内容备份到 history_code.md")
+    except Exception as e:
+        logger.error(f"备份过程中发生错误: {str(e)}")
+        raise
+
 def main():
-    # 清空leicode.md文件
+    # 首先进行备份
+    backup_leicode_content()
+    
+    # 清空 leicode.md 文件
     clear_file('doc/leicode.md')
     
     # 生成文件树

@@ -16,12 +16,11 @@
 │   ├── deepclaude/
 │   │   ├── __init__.py
 │   │   ├── deepclaude.py
-├── test/
-│   ├── test_deepseek_client.py
-│   ├── test_claude_client.py
 ├── .github/
 │   ├── workflows/
 ├── doc/
+│   ├── test_deepseek_client.py
+│   ├── test_claude_client.py
 ```
 
 # Web服务器层
@@ -236,7 +235,6 @@ class DeepSeekClient(BaseClient):
  def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
  super().__init__(api_key, api_url)
  self.provider = provider
- self.default_model = "deepseek-ai/DeepSeek-R1"
  def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
  has_start = "<think>" in content
  has_end = "</think>" in content
@@ -556,24 +554,13 @@ from app.utils.logger import logger
 from app.clients import DeepSeekClient, ClaudeClient
 from app.utils.message_processor import MessageProcessor
 class DeepClaude:
- def __init__(
- self,
- deepseek_api_key: str,
- claude_api_key: str,
- deepseek_api_url: str = None,
+ def __init__(self, deepseek_api_key: str, claude_api_key: str,
+ deepseek_api_url: str = "https://api.deepseek.com/v1/chat/completions",
  claude_api_url: str = "https://api.anthropic.com/v1/messages",
  claude_provider: str = "anthropic",
- is_origin_reasoning: bool = True
- ):
- self.deepseek_client = DeepSeekClient(
- api_key=deepseek_api_key,
- api_url=deepseek_api_url if deepseek_api_url else "https://api.siliconflow.cn/v1/chat/completions"
- )
- self.claude_client = ClaudeClient(
- api_key=claude_api_key,
- api_url=claude_api_url,
- provider=claude_provider
- )
+ is_origin_reasoning: bool = True):
+ self.deepseek_client = DeepSeekClient(deepseek_api_key, deepseek_api_url)
+ self.claude_client = ClaudeClient(claude_api_key, claude_api_url, claude_provider)
  self.is_origin_reasoning = is_origin_reasoning
  async def chat_completions_with_stream(
  self,
@@ -761,7 +748,7 @@ class DeepClaude:
  raise e```
 ______________________________
 
-## .../test/test_deepseek_client.py
+## .../doc/test_deepseek_client.py
 ```python
 import os
 import sys
@@ -771,6 +758,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 from app.clients.deepseek_client import DeepSeekClient
 from app.utils.logger import logger
+from app.utils.message_processor import MessageProcessor
 load_dotenv()
 os.environ['LOG_LEVEL'] = 'DEBUG'
 async def test_deepseek_stream():
@@ -784,8 +772,14 @@ async def test_deepseek_stream():
  logger.error("请在 .env 文件中设置 DEEPSEEK_API_KEY")
  return
  messages = [
- {"role": "user", "content": "1+1等于几?"}
+ {"role": "user", "content": "9.8和9.111谁大"}
  ]
+ message_processor = MessageProcessor()
+ try:
+ messages = message_processor.convert_to_deepseek_format(messages)
+ except Exception as e:
+ logger.error(f"消息格式转换失败: {e}")
+ return
  client = DeepSeekClient(api_key, api_url)
  try:
  logger.info("开始测试 DeepSeek 流式输出...")
@@ -808,7 +802,7 @@ if __name__ == "__main__":
  main()```
 ______________________________
 
-## .../test/test_claude_client.py
+## .../doc/test_claude_client.py
 ```python
 import os
 import sys
@@ -830,7 +824,7 @@ async def test_claude_stream():
  logger.error("请在 .env 文件中设置 CLAUDE_API_KEY")
  return
  messages = [
- {"role": "user", "content": "1+1等于几?"}
+ {"role": "user", "content": "9.8和9.111谁大"}
  ]
  client = ClaudeClient(api_key, api_url, provider)
  try:
