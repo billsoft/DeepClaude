@@ -47,30 +47,41 @@ class DeepClaude:
     2. 非流式模式：等待完整结果后一次性返回
     """
 
-    def __init__(self, deepseek_api_key: str, claude_api_key: str, 
-                 deepseek_api_url: str = "https://api.deepseek.com/v1/chat/completions", 
-                 claude_api_url: str = "https://api.anthropic.com/v1/messages",
-                 claude_provider: str = "anthropic",
-                 is_origin_reasoning: bool = True):
-        """初始化 API 客户端
+    def __init__(
+        self,
+        deepseek_api_key: str,
+        claude_api_key: str,
+        deepseek_api_url: str = None,
+        claude_api_url: str = "https://api.anthropic.com/v1/messages",
+        claude_provider: str = "anthropic",
+        is_origin_reasoning: bool = True
+    ):
+        """初始化 DeepClaude
         
         Args:
             deepseek_api_key: DeepSeek API密钥
             claude_api_key: Claude API密钥
-            deepseek_api_url: DeepSeek API地址，默认为官方API地址
-            claude_api_url: Claude API地址，默认为Anthropic官方API地址
-            claude_provider: Claude API提供商，支持anthropic/openrouter/oneapi
-            is_origin_reasoning: 是否使用原始推理格式，True表示使用原始格式，False表示使用优化格式
+            deepseek_api_url: DeepSeek API地址，可选
+            claude_api_url: Claude API地址，默认为Anthropic官方地址
+            claude_provider: Claude服务提供商，默认为"anthropic"
+            is_origin_reasoning: 是否使用原始推理格式，默认为True
         """
-        self.deepseek_client = DeepSeekClient(deepseek_api_key, deepseek_api_url)
-        self.claude_client = ClaudeClient(claude_api_key, claude_api_url, claude_provider)
+        self.deepseek_client = DeepSeekClient(
+            api_key=deepseek_api_key,
+            api_url=deepseek_api_url if deepseek_api_url else "https://api.siliconflow.cn/v1/chat/completions"
+        )
+        self.claude_client = ClaudeClient(
+            api_key=claude_api_key,
+            api_url=claude_api_url,
+            provider=claude_provider
+        )
         self.is_origin_reasoning = is_origin_reasoning
 
     async def chat_completions_with_stream(
         self,
         messages: list,
         model_arg: tuple[float, float, float, float],
-        deepseek_model: str = "deepseek-reasoner",
+        deepseek_model: str = "deepseek-ai/DeepSeek-R1",
         claude_model: str = "claude-3-5-sonnet-20241022"
     ) -> AsyncGenerator[bytes, None]:
         """处理完整的流式输出过程
@@ -128,19 +139,28 @@ class DeepClaude:
         2. Claude API调用异常：记录错误并结束处理
         3. 队列操作异常：确保正确关闭和清理
         """
-        # 验证消息序列格式
+        # 验证消息格式
+        if not messages:
+            error_msg = "消息列表为空"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # 检查连续消息
         for i in range(1, len(messages)):
             if messages[i].get("role") == messages[i-1].get("role"):
-                logger.warning(f"检测到连续的{messages[i].get('role')}消息，跳过处理")
-                return
-
-        # 验证并转换消息格式
+                error_msg = f"检测到连续的{messages[i].get('role')}消息"
+                logger.warning(error_msg)
+                raise ValueError(error_msg)
+            
+        # 转换消息格式
         message_processor = MessageProcessor()
         try:
             messages = message_processor.convert_to_deepseek_format(messages)
+            logger.debug(f"转换后的消息: {messages}")
         except Exception as e:
-            logger.error(f"消息格式转换失败: {e}")
-            return
+            error_msg = f"消息格式转换失败: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            raise ValueError(error_msg)
 
         # 生成唯一的会话ID和时间戳
         chat_id = f"chatcmpl-{hex(int(time.time() * 1000))[2:]}"
@@ -154,17 +174,14 @@ class DeepClaude:
         reasoning_content = []  # 存储完整的推理过程
 
         async def process_deepseek():
-            """处理 DeepSeek 流式的异步函数
-            
-            主要职责：
-            1. 调用 DeepSeek API 获取推理流
-            2. 收集和累积推理内容
-            3. 实时推送推理过程到输出队列
-            4. 完成后将推理结果发送给 Claude
-            """
+            """处理 DeepSeek 流式的异步函数"""
             logger.info(f"开始处理 DeepSeek 流，使用模型：{deepseek_model}, 提供商: {self.deepseek_client.provider}")
             try:
-                async for content_type, content in self.deepseek_client.stream_chat(messages, deepseek_model, self.is_origin_reasoning):
+                async for content_type, content in self.deepseek_client.stream_chat(
+                    messages=messages, 
+                    model=deepseek_model, 
+                    is_origin_reasoning=self.is_origin_reasoning
+                ):
                     if content_type == "reasoning":
                         # 收集推理内容并构造输出响应
                         reasoning_content.append(content)
@@ -178,10 +195,11 @@ class DeepClaude:
                                 "delta": {
                                     "role": "assistant",
                                     "reasoning_content": content,
-                                    "content": ""
+                                    "content": None  # 确保设置为 None
                                 }
                             }]
                         }
+                        logger.debug(f"发送推理响应: {response}")
                         await output_queue.put(f"data: {json.dumps(response)}\n\n".encode('utf-8'))
                     elif content_type == "content":
                         # 推理完成，发送结果给 Claude
@@ -189,11 +207,12 @@ class DeepClaude:
                         await claude_queue.put("".join(reasoning_content))
                         break
             except Exception as e:
-                logger.error(f"处理 DeepSeek 流时发生错误: {e}")
+                logger.error(f"处理 DeepSeek 流时发生错误: {e}", exc_info=True)
                 await claude_queue.put("")
-            # 标记任务完成
-            logger.info("DeepSeek 任务处理完成，标记结束")
-            await output_queue.put(None)
+            finally:
+                # 标记任务完成
+                logger.info("DeepSeek 任务处理完成，标记结束")
+                await output_queue.put(None)
 
         async def process_claude():
             """处理 Claude 流的异步函数

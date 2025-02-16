@@ -63,7 +63,7 @@ CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messa
 # DEEPSEEK_MODEL: 使用的DeepSeek模型版本
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1")
 
 # 是否使用原始推理格式，默认为True
 IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
@@ -176,40 +176,74 @@ async def chat_completions(request: Request):
     """
 
     try:
-        # 1. 获取基础信息
         body = await request.json()
+        logger.debug(f"收到请求数据: {body}")
+        
         messages = body.get("messages")
-
-        # 2. 获取并验证参数
-        model_arg = (
-            get_and_validate_params(body)
-        )
-        stream = model_arg[4]  # 获取 stream 参数
-
-        # 3. 根据 stream 参数返回相应的响应
+        logger.debug(f"消息内容: {messages}")
+        
+        # 预处理消息，移除连续的相同角色消息
+        processed_messages = []
+        for i, msg in enumerate(messages):
+            if i == 0 or msg.get("role") != processed_messages[-1].get("role"):
+                processed_messages.append(msg)
+            else:
+                # 合并连续相同角色的消息内容
+                processed_messages[-1]["content"] += f"\n{msg.get('content', '')}"
+        
+        model_arg = get_and_validate_params(body)
+        stream = model_arg[4]
+        
         if stream:
-            return StreamingResponse(
-                deep_claude.chat_completions_with_stream(
-                    messages=messages,
-                    model_arg=model_arg[:4],  # 不传递 stream 参数
+            try:
+                logger.debug(f"开始流式处理，使用处理后的消息: {processed_messages}")
+                stream_response = deep_claude.chat_completions_with_stream(
+                    messages=processed_messages,
+                    model_arg=model_arg[:4],
                     deepseek_model=DEEPSEEK_MODEL,
                     claude_model=CLAUDE_MODEL
-                ),
-                media_type="text/event-stream"
-            )
+                )
+                return StreamingResponse(
+                    stream_response,
+                    media_type="text/event-stream",
+                    headers={
+                        "X-Accel-Buffering": "no",
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                    }
+                )
+            except ValueError as e:
+                error_msg = str(e)
+                logger.warning(f"业务逻辑错误: {error_msg}")
+                return {"error": True, "message": error_msg}
+            except Exception as e:
+                error_msg = f"流式处理错误: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                return {"error": True, "message": "network error"}
         else:
-            # 非流式输出
-            response = await deep_claude.chat_completions_without_stream(
-                messages=messages,
-                model_arg=model_arg[:4],  # 不传递 stream 参数
-                deepseek_model=DEEPSEEK_MODEL,
-                claude_model=CLAUDE_MODEL
-            )
-            return response
-
+            try:
+                response = await deep_claude.chat_completions_without_stream(
+                    messages=processed_messages,  # 使用处理后的消息
+                    model_arg=model_arg[:4],
+                    deepseek_model=DEEPSEEK_MODEL,
+                    claude_model=CLAUDE_MODEL
+                )
+                return response
+            except ValueError as e:
+                # 处理业务逻辑错误
+                error_msg = str(e)
+                logger.warning(f"业务逻辑错误: {error_msg}")
+                return {"error": True, "message": error_msg}
+            except Exception as e:
+                # 处理其他错误
+                error_msg = f"非流式处理错误: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                return {"error": True, "message": "network error"}
+                
     except Exception as e:
-        logger.error(f"处理请求时发生错误: {e}")
-        return {"error": str(e)}
+        error_msg = f"处理请求时发生错误: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {"error": True, "message": "network error"}
 
 
 def get_and_validate_params(body: dict) -> tuple:

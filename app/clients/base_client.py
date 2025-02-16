@@ -24,35 +24,47 @@ class BaseClient(ABC):
         self.api_url = api_url
         
     async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
-        """发送请求并处理响应
-        
-        使用aiohttp异步发送POST请求并处理流式响应。该方法实现了以下功能：
-        1. 创建异步HTTP会话
-        2. 发送POST请求到指定API端点
-        3. 处理响应状态码
-        4. 以流式方式获取响应数据
-        5. 错误处理和日志记录
+        """发送 API 请求并处理响应
         
         Args:
-            headers: 请求头字典，包含认证信息等
-            data: 请求数据字典，包含发送给API的参数
+            headers: 请求头
+            data: 请求数据
             
         Yields:
-            bytes: 原始响应数据块，用于流式处理
+            bytes: 响应数据流
         """
         try:
             async with aiohttp.ClientSession() as session:
+                logger.debug(f"正在发送请求到: {self.api_url}")
+                logger.debug(f"请求头: {headers}")
+                logger.debug(f"请求数据: {data}")
+                
                 async with session.post(self.api_url, headers=headers, json=data) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        logger.error(f"API 请求失败: {error_text}")
-                        return
+                        error_msg = (
+                            f"API 请求失败:\n"
+                            f"状态码: {response.status}\n"
+                            f"URL: {self.api_url}\n"
+                            f"错误信息: {error_text}"
+                        )
+                        logger.error(error_msg)
+                        raise aiohttp.ClientError(error_msg)
                         
                     async for chunk in response.content.iter_any():
+                        if not chunk:
+                            logger.warning("收到空响应块")
+                            continue
                         yield chunk
                         
+        except aiohttp.ClientError as e:
+            error_msg = f"网络请求错误: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"请求 API 时发生错误: {e}")
+            error_msg = f"未知错误: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            raise
             
     @abstractmethod
     async def stream_chat(self, messages: list, model: str) -> AsyncGenerator[tuple[str, str], None]:

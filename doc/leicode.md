@@ -19,6 +19,8 @@
 ├── .github/
 │   ├── workflows/
 ├── doc/
+│   ├── test_deepseek_client.py
+│   ├── test_claude_client.py
 ```
 
 # Web服务器层
@@ -43,7 +45,7 @@ CLAUDE_PROVIDER = os.getenv("CLAUDE_PROVIDER", "anthropic")
 CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1")
 IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
 allow_origins_list = ALLOW_ORIGINS.split(",") if ALLOW_ORIGINS else []
 app.add_middleware(
@@ -99,32 +101,64 @@ async def list_models():
 async def chat_completions(request: Request):
  try:
  body = await request.json()
+ logger.debug(f"收到请求数据: {body}")
  messages = body.get("messages")
- model_arg = (
- get_and_validate_params(body)
- )
+ logger.debug(f"消息内容: {messages}")
+ processed_messages = []
+ for i, msg in enumerate(messages):
+ if i == 0 or msg.get("role") != processed_messages[-1].get("role"):
+ processed_messages.append(msg)
+ else:
+ processed_messages[-1]["content"] += f"\n{msg.get('content', '')}"
+ model_arg = get_and_validate_params(body)
  stream = model_arg[4]
  if stream:
- return StreamingResponse(
- deep_claude.chat_completions_with_stream(
- messages=messages,
+ try:
+ logger.debug(f"开始流式处理，使用处理后的消息: {processed_messages}")
+ stream_response = deep_claude.chat_completions_with_stream(
+ messages=processed_messages,
  model_arg=model_arg[:4],
  deepseek_model=DEEPSEEK_MODEL,
  claude_model=CLAUDE_MODEL
- ),
- media_type="text/event-stream"
  )
+ return StreamingResponse(
+ stream_response,
+ media_type="text/event-stream",
+ headers={
+ "X-Accel-Buffering": "no",
+ "Cache-Control": "no-cache",
+ "Connection": "keep-alive",
+ }
+ )
+ except ValueError as e:
+ error_msg = str(e)
+ logger.warning(f"业务逻辑错误: {error_msg}")
+ return {"error": True, "message": error_msg}
+ except Exception as e:
+ error_msg = f"流式处理错误: {str(e)}"
+ logger.error(error_msg, exc_info=True)
+ return {"error": True, "message": "network error"}
  else:
+ try:
  response = await deep_claude.chat_completions_without_stream(
- messages=messages,
+ messages=processed_messages,
  model_arg=model_arg[:4],
  deepseek_model=DEEPSEEK_MODEL,
  claude_model=CLAUDE_MODEL
  )
  return response
+ except ValueError as e:
+ error_msg = str(e)
+ logger.warning(f"业务逻辑错误: {error_msg}")
+ return {"error": True, "message": error_msg}
  except Exception as e:
- logger.error(f"处理请求时发生错误: {e}")
- return {"error": str(e)}
+ error_msg = f"非流式处理错误: {str(e)}"
+ logger.error(error_msg, exc_info=True)
+ return {"error": True, "message": "network error"}
+ except Exception as e:
+ error_msg = f"处理请求时发生错误: {str(e)}"
+ logger.error(error_msg, exc_info=True)
+ return {"error": True, "message": "network error"}
 def get_and_validate_params(body: dict) -> tuple:
  temperature: float = body.get("temperature", 0.5)
  top_p: float = body.get("top_p", 0.9)
@@ -150,15 +184,33 @@ class BaseClient(ABC):
  async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
  try:
  async with aiohttp.ClientSession() as session:
+ logger.debug(f"正在发送请求到: {self.api_url}")
+ logger.debug(f"请求头: {headers}")
+ logger.debug(f"请求数据: {data}")
  async with session.post(self.api_url, headers=headers, json=data) as response:
  if response.status != 200:
  error_text = await response.text()
- logger.error(f"API 请求失败: {error_text}")
- return
+ error_msg = (
+ f"API 请求失败:\n"
+ f"状态码: {response.status}\n"
+ f"URL: {self.api_url}\n"
+ f"错误信息: {error_text}"
+ )
+ logger.error(error_msg)
+ raise aiohttp.ClientError(error_msg)
  async for chunk in response.content.iter_any():
+ if not chunk:
+ logger.warning("收到空响应块")
+ continue
  yield chunk
+ except aiohttp.ClientError as e:
+ error_msg = f"网络请求错误: {str(e)}"
+ logger.error(error_msg, exc_info=True)
+ raise
  except Exception as e:
- logger.error(f"请求 API 时发生错误: {e}")
+ error_msg = f"未知错误: {str(e)}"
+ logger.error(error_msg, exc_info=True)
+ raise
  @abstractmethod
  async def stream_chat(self, messages: list, model: str) -> AsyncGenerator[tuple[str, str], None]:
  pass```
@@ -178,6 +230,7 @@ import json
 from typing import AsyncGenerator
 from app.utils.logger import logger
 from .base_client import BaseClient
+VALID_MODELS = ["deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-Chat-7B"]
 class DeepSeekClient(BaseClient):
  def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
  super().__init__(api_key, api_url)
@@ -194,6 +247,10 @@ class DeepSeekClient(BaseClient):
  else:
  return True, content
  async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
+ if model not in VALID_MODELS:
+ error_msg = f"无效的模型名称: {model}，可用模型: {VALID_MODELS}"
+ logger.error(error_msg)
+ raise ValueError(error_msg)
  headers = {
  "Authorization": f"Bearer {self.api_key}",
  "Content-Type": "application/json",
@@ -205,56 +262,40 @@ class DeepSeekClient(BaseClient):
  "stream": True,
  }
  logger.debug(f"开始流式对话：{data}")
- accumulated_content = ""
- is_collecting_think = False
+ try:
  async for chunk in self._make_request(headers, data):
  chunk_str = chunk.decode('utf-8')
- try:
- lines = chunk_str.splitlines()
- for line in lines:
+ if not chunk_str.strip():
+ continue
+ for line in chunk_str.splitlines():
  if line.startswith("data: "):
  json_str = line[len("data: "):]
  if json_str == "[DONE]":
  return
+ try:
  data = json.loads(json_str)
- if data and data.get("choices") and data["choices"][0].get("delta"):
+ if not data or not data.get("choices") or not data["choices"][0].get("delta"):
+ continue
  delta = data["choices"][0]["delta"]
  if is_origin_reasoning:
  if delta.get("reasoning_content"):
  content = delta["reasoning_content"]
  logger.debug(f"提取推理内容：{content}")
  yield "reasoning", content
- if delta.get("reasoning_content") is None and delta.get("content"):
+ elif delta.get("content"):
  content = delta["content"]
  logger.info(f"提取内容信息，推理阶段结束: {content}")
  yield "content", content
  else:
  if delta.get("content"):
  content = delta["content"]
- if content == "":
- continue
- logger.debug(f"非原生推理内容：{content}")
- accumulated_content += content
- is_complete, processed_content = self._process_think_tag_content(accumulated_content)
- if "<think>" in content and not is_collecting_think:
- logger.debug(f"开始收集推理内容：{content}")
- is_collecting_think = True
- yield "reasoning", content
- elif is_collecting_think:
- if "</think>" in content:
- logger.debug(f"推理内容结束：{content}")
- is_collecting_think = False
- yield "reasoning", content
- yield "content", ""
- accumulated_content = ""
- else:
- yield "reasoning", content
- else:
  yield "content", content
  except json.JSONDecodeError as e:
  logger.error(f"JSON 解析错误: {e}")
+ continue
  except Exception as e:
- logger.error(f"处理 chunk 时发生错误: {e}")```
+ logger.error(f"流式对话发生错误: {e}", exc_info=True)
+ raise```
 ______________________________
 
 ## .../clients/claude_client.py
@@ -525,19 +566,26 @@ class DeepClaude:
  self,
  messages: list,
  model_arg: tuple[float, float, float, float],
- deepseek_model: str = "deepseek-reasoner",
+ deepseek_model: str = "deepseek-ai/DeepSeek-R1",
  claude_model: str = "claude-3-5-sonnet-20241022"
  ) -> AsyncGenerator[bytes, None]:
+ if not messages:
+ error_msg = "消息列表为空"
+ logger.error(error_msg)
+ raise ValueError(error_msg)
  for i in range(1, len(messages)):
  if messages[i].get("role") == messages[i-1].get("role"):
- logger.warning(f"检测到连续的{messages[i].get('role')}消息，跳过处理")
- return
+ error_msg = f"检测到连续的{messages[i].get('role')}消息"
+ logger.warning(error_msg)
+ raise ValueError(error_msg)
  message_processor = MessageProcessor()
  try:
  messages = message_processor.convert_to_deepseek_format(messages)
+ logger.debug(f"转换后的消息: {messages}")
  except Exception as e:
- logger.error(f"消息格式转换失败: {e}")
- return
+ error_msg = f"消息格式转换失败: {str(e)}"
+ logger.error(error_msg, exc_info=True)
+ raise ValueError(error_msg)
  chat_id = f"chatcmpl-{hex(int(time.time() * 1000))[2:]}"
  created_time = int(time.time())
  output_queue = asyncio.Queue()
@@ -546,7 +594,11 @@ class DeepClaude:
  async def process_deepseek():
  logger.info(f"开始处理 DeepSeek 流，使用模型：{deepseek_model}, 提供商: {self.deepseek_client.provider}")
  try:
- async for content_type, content in self.deepseek_client.stream_chat(messages, deepseek_model, self.is_origin_reasoning):
+ async for content_type, content in self.deepseek_client.stream_chat(
+ messages=messages,
+ model=deepseek_model,
+ is_origin_reasoning=self.is_origin_reasoning
+ ):
  if content_type == "reasoning":
  reasoning_content.append(content)
  response = {
@@ -559,18 +611,20 @@ class DeepClaude:
  "delta": {
  "role": "assistant",
  "reasoning_content": content,
- "content": ""
+ "content": None
  }
  }]
  }
+ logger.debug(f"发送推理响应: {response}")
  await output_queue.put(f"data: {json.dumps(response)}\n\n".encode('utf-8'))
  elif content_type == "content":
  logger.info(f"DeepSeek 推理完成，收集到的推理内容长度：{len(''.join(reasoning_content))}")
  await claude_queue.put("".join(reasoning_content))
  break
  except Exception as e:
- logger.error(f"处理 DeepSeek 流时发生错误: {e}")
+ logger.error(f"处理 DeepSeek 流时发生错误: {e}", exc_info=True)
  await claude_queue.put("")
+ finally:
  logger.info("DeepSeek 任务处理完成，标记结束")
  await output_queue.put(None)
  async def process_claude():
@@ -692,6 +746,103 @@ class DeepClaude:
  except Exception as e:
  logger.error(f"获取 Claude 响应时发生错误: {e}")
  raise e```
+______________________________
+
+## .../doc/test_deepseek_client.py
+```python
+import os
+import sys
+import asyncio
+from dotenv import load_dotenv
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+from app.clients.deepseek_client import DeepSeekClient
+from app.utils.logger import logger
+from app.utils.message_processor import MessageProcessor
+load_dotenv()
+os.environ['LOG_LEVEL'] = 'DEBUG'
+async def test_deepseek_stream():
+ api_key = os.getenv("DEEPSEEK_API_KEY")
+ api_url = os.getenv("DEEPSEEK_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
+ is_origin_reasoning = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
+ logger.info(f"API URL: {api_url}")
+ logger.info(f"API Key 是否存在: {bool(api_key)}")
+ logger.info(f"原始推理模式: {is_origin_reasoning}")
+ if not api_key:
+ logger.error("请在 .env 文件中设置 DEEPSEEK_API_KEY")
+ return
+ messages = [
+ {"role": "user", "content": "9.8和9.111谁大"}
+ ]
+ message_processor = MessageProcessor()
+ try:
+ messages = message_processor.convert_to_deepseek_format(messages)
+ except Exception as e:
+ logger.error(f"消息格式转换失败: {e}")
+ return
+ client = DeepSeekClient(api_key, api_url)
+ try:
+ logger.info("开始测试 DeepSeek 流式输出...")
+ logger.debug(f"发送消息: {messages}")
+ async for content_type, content in client.stream_chat(
+ messages=messages,
+ model="deepseek-ai/DeepSeek-R1",
+ is_origin_reasoning=is_origin_reasoning
+ ):
+ if content_type == "reasoning":
+ logger.info(f"收到推理内容: {content}")
+ elif content_type == "content":
+ logger.info(f"收到最终答案: {content}")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+ logger.error(f"错误类型: {type(e)}")
+def main():
+ asyncio.run(test_deepseek_stream())
+if __name__ == "__main__":
+ main()```
+______________________________
+
+## .../doc/test_claude_client.py
+```python
+import os
+import sys
+import asyncio
+from dotenv import load_dotenv
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+from app.clients.claude_client import ClaudeClient
+from app.utils.logger import logger
+load_dotenv()
+async def test_claude_stream():
+ api_key = os.getenv("CLAUDE_API_KEY")
+ api_url = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
+ provider = os.getenv("CLAUDE_PROVIDER", "anthropic")
+ logger.info(f"API URL: {api_url}")
+ logger.info(f"API Key 是否存在: {bool(api_key)}")
+ logger.info(f"Provider: {provider}")
+ if not api_key:
+ logger.error("请在 .env 文件中设置 CLAUDE_API_KEY")
+ return
+ messages = [
+ {"role": "user", "content": "9.8和9.111谁大"}
+ ]
+ client = ClaudeClient(api_key, api_url, provider)
+ try:
+ logger.info("开始测试 Claude 流式输出...")
+ async for content_type, content in client.stream_chat(
+ messages=messages,
+ model_arg=(0.7, 0.9, 0, 0),
+ model="claude-3-5-sonnet-20241022"
+ ):
+ if content_type == "answer":
+ logger.info(f"收到回答内容: {content}")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+ logger.error(f"错误类型: {type(e)}")
+def main():
+ asyncio.run(test_claude_stream())
+if __name__ == "__main__":
+ main()```
 ______________________________
 
 # 配置文件
