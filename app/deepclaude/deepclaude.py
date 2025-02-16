@@ -268,8 +268,11 @@ class DeepClaude:
                 # 构造 Claude 的输入消息
                 claude_messages = messages.copy()
                 combined_content = f"""
-                Here's my another model's reasoning process:\n{reasoning}\n\n
-                Based on this reasoning, provide your response directly to me:"""
+                这是我自己基于问题的思考过程:\n{reasoning}\n\n
+                上面是我自己的思考过程不一定完全正确请借鉴思考过程和期中你也认为正确的部分（1000% 权重）
+                ，现在请给出详细和细致的答案，不要省略步骤和步骤细节
+                ，要分解原题确保你理解了原题的每个部分，也要掌握整体意思
+                ，最佳质量（1000% 权重），最详细解答（1000% 权重），不要回答太简单让我能参考一步步应用（1000% 权重）:"""
                 
                 # 处理用户消息，将推理结果添加到最后一条用户消息中
                 last_message = claude_messages[-1]

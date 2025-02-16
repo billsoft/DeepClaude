@@ -9,38 +9,8 @@
 </div>
 
 <div>
-<h3 style="color: #FF9909"> 特别说明：我在原作者 ErlichLiu/DeepClaude:main 的早起代码基础上进行了大量修改，形成了现在的代码，希望学习多 AI 配合的朋友可以学习我的代码，也可以留言讨论，也欢迎加微信 bill059</h3>
+<h3 style="color: #FF9909"> 特别说明：我在原作者 ErlichLiu/DeepClaude:main 的早起代码基础上进行了大量修改，形成了现在的代码，希望学习多 AI 配合的朋友可以学习我的代码，也可以留言讨论，也欢迎加微信 bill0359</h3>
 </div>
-
----
-
-<details>
-<summary><strong>更新日志：</strong></summary> 
-<div>
-2025-02-08.2: 支持非流式请求，支持 OpenAI 兼容的 models 接口返回。（⚠️ 当前暂未实现正确的 tokens 消耗统计，稍后更新）
-
-2025-02-08.1: 添加 Github Actions，支持 fork 自动同步、支持自动构建 Docker 最新镜像、支持 docker-compose 部署
-
-2025-02-07.2: 修复 Claude temperature 参数可能会超过范围导致的请求失败的 bug
-
-2025-02-07.1: 支持 Claude temputerature 等参数；添加更详细的 .env.example 说明
-
-2025-02-06.1：修复非原生推理模型无法获得到推理内容的 bug
-
-2025-02-05.1: 支持通过环境变量配置是否是原生支持推理字段的模型，满血版本通常支持
-
-2025-02-04.2: 支持跨域配置，可在 .env 中配置
-
-2025-02-04.1: 支持 Openrouter 以及 OneAPI 等中转服务商作为 Claude 部分的供应商
-
-2025-02-03.3: 支持 OpenRouter 作为 Claude 的供应商，详见 .env.example 说明
-
-2025-02-03.2: 由于 deepseek r1 在某种程度上已经开启了一个规范，所以我们也遵循推理标注的这种规范，更好适配支持的更好的 Cherry Studio 等软件。
-
-2025-02-03.1: Siliconflow 的 DeepSeek R1 返回结构变更，支持新的返回结构
-
-</div>
-</details>
 
 # Table of Contents
 
