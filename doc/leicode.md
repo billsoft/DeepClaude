@@ -607,6 +607,20 @@ class DeepClaude:
  async def process_deepseek():
  logger.info(f"开始处理 DeepSeek 流，使用模型：{deepseek_model}, 提供商: {self.deepseek_client.provider}")
  try:
+ start_response = {
+ "id": chat_id,
+ "object": "chat.completion.chunk",
+ "created": created_time,
+ "model": deepseek_model,
+ "choices": [{
+ "index": 0,
+ "delta": {
+ "role": "assistant",
+ "content": "🤔 思考过程:\n"
+ }
+ }]
+ }
+ await output_queue.put(f"data: {json.dumps(start_response)}\n\n".encode('utf-8'))
  async for content_type, content in self.deepseek_client.stream_chat(
  messages=messages,
  model=deepseek_model,
@@ -623,14 +637,27 @@ class DeepClaude:
  "index": 0,
  "delta": {
  "role": "assistant",
- "reasoning_content": content,
- "content": None
+ "content": content
  }
  }]
  }
  logger.debug(f"发送推理响应: {response}")
  await output_queue.put(f"data: {json.dumps(response)}\n\n".encode('utf-8'))
  elif content_type == "content":
+ separator_response = {
+ "id": chat_id,
+ "object": "chat.completion.chunk",
+ "created": created_time,
+ "model": deepseek_model,
+ "choices": [{
+ "index": 0,
+ "delta": {
+ "role": "assistant",
+ "content": "\n\n---\n思考完毕，开始回答：\n\n"
+ }
+ }]
+ }
+ await output_queue.put(f"data: {json.dumps(separator_response)}\n\n".encode('utf-8'))
  logger.info(f"DeepSeek 推理完成，收集到的推理内容长度：{len(''.join(reasoning_content))}")
  await claude_queue.put("".join(reasoning_content))
  break
@@ -688,7 +715,8 @@ class DeepClaude:
  item = await output_queue.get()
  if item is None:
  finished_tasks += 1
- else:
+ continue
+ logger.debug(f"自定义api向外发送 token: {item}")
  yield item
  yield b'data: [DONE]\n\n'
  async def chat_completions_without_stream(

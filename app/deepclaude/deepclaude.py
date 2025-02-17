@@ -26,6 +26,7 @@ from typing import AsyncGenerator
 from app.utils.logger import logger
 from app.clients import DeepSeekClient, ClaudeClient
 from app.utils.message_processor import MessageProcessor
+import aiohttp
 
 
 class DeepClaude:
@@ -76,6 +77,13 @@ class DeepClaude:
             provider=claude_provider
         )
         self.is_origin_reasoning = is_origin_reasoning
+
+        # 设置重试相关的配置
+        self.retry_config = {
+            'max_retries': 5,
+            'base_delay': 2,
+            'max_delay': 30
+        }
 
     async def chat_completions_with_stream(
         self,
@@ -175,75 +183,123 @@ class DeepClaude:
 
         async def process_deepseek():
             """处理 DeepSeek 流式的异步函数"""
-            logger.info(f"开始处理 DeepSeek 流，使用模型：{deepseek_model}, 提供商: {self.deepseek_client.provider}")
-            try:
-                # 添加思考开始标记
-                start_response = {
-                    "id": chat_id,
-                    "object": "chat.completion.chunk",
-                    "created": created_time,
-                    "model": deepseek_model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "role": "assistant",
-                            "content": "🤔 思考过程:\n"  # 只在开始时添加标记和换行
-                        }
-                    }]
-                }
-                await output_queue.put(f"data: {json.dumps(start_response)}\n\n".encode('utf-8'))
-                
-                async for content_type, content in self.deepseek_client.stream_chat(
-                    messages=messages, 
-                    model=deepseek_model, 
-                    is_origin_reasoning=self.is_origin_reasoning
-                ):
-                    if content_type == "reasoning":
-                        # 收集推理内容
-                        reasoning_content.append(content)
-                        # 直接发送内容，不添加额外标记
-                        response = {
-                            "id": chat_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_time,
-                            "model": deepseek_model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {
-                                    "role": "assistant",
-                                    "content": content  # 直接发送内容，不添加标记
-                                }
-                            }]
-                        }
-                        logger.debug(f"发送推理响应: {response}")
-                        await output_queue.put(f"data: {json.dumps(response)}\n\n".encode('utf-8'))
-                    elif content_type == "content":
-                        # 添加思考结束分隔符
-                        separator_response = {
-                            "id": chat_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_time,
-                            "model": deepseek_model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {
-                                    "role": "assistant",
-                                    "content": "\n\n---\n思考完毕，开始回答：\n\n"
-                                }
-                            }]
-                        }
-                        await output_queue.put(f"data: {json.dumps(separator_response)}\n\n".encode('utf-8'))
-                        
-                        # 发送累积的推理内容给 Claude
-                        logger.info(f"DeepSeek 推理完成，收集到的推理内容长度：{len(''.join(reasoning_content))}")
-                        await claude_queue.put("".join(reasoning_content))
-                        break
-            except Exception as e:
-                logger.error(f"处理 DeepSeek 流时发生错误: {e}", exc_info=True)
-                await claude_queue.put("")
-            finally:
-                logger.info("DeepSeek 任务处理完成，标记结束")
-                await output_queue.put(None)
+            start_time = time.time()
+            request_stats = {
+                'retries': 0,
+                'total_delay': 0,
+                'errors': []
+            }
+            
+            retry_count = 0
+            max_retries = self.retry_config['max_retries']
+            base_delay = self.retry_config['base_delay']
+            
+            while retry_count < max_retries:
+                try:
+                    logger.info(f"开始处理 DeepSeek 流，使用模型：{deepseek_model}, 提供商: {self.deepseek_client.provider}")
+                    
+                    # 添加思考开始标记
+                    start_response = {
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_time,
+                        "model": deepseek_model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "content": "🤔 思考过程:\n"
+                            }
+                        }]
+                    }
+                    await output_queue.put(f"data: {json.dumps(start_response)}\n\n".encode('utf-8'))
+                    
+                    async for content_type, content in self.deepseek_client.stream_chat(
+                        messages=messages, 
+                        model=deepseek_model, 
+                        is_origin_reasoning=self.is_origin_reasoning
+                    ):
+                        if content_type == "reasoning":
+                            # 收集推理内容
+                            reasoning_content.append(content)
+                            # 直接发送内容，不添加额外标记
+                            response = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_time,
+                                "model": deepseek_model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {
+                                        "role": "assistant",
+                                        "content": content  # 直接发送内容，不添加标记
+                                    }
+                                }]
+                            }
+                            logger.debug(f"发送推理响应: {response}")
+                            await output_queue.put(f"data: {json.dumps(response)}\n\n".encode('utf-8'))
+                        elif content_type == "content":
+                            # 添加思考结束分隔符
+                            separator_response = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_time,
+                                "model": deepseek_model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {
+                                        "role": "assistant",
+                                        "content": "\n\n---\n思考完毕，开始回答：\n\n"
+                                    }
+                                }]
+                            }
+                            await output_queue.put(f"data: {json.dumps(separator_response)}\n\n".encode('utf-8'))
+                            
+                            # 发送累积的推理内容给 Claude
+                            logger.info(f"DeepSeek 推理完成，收集到的推理内容长度：{len(''.join(reasoning_content))}")
+                            await claude_queue.put("".join(reasoning_content))
+                            break
+                    break  # 成功则跳出重试循环
+                    
+                except aiohttp.ClientError as e:
+                    retry_count += 1
+                    request_stats['retries'] += 1
+                    request_stats['errors'].append(str(e))
+                    
+                    if any(code in str(e) for code in ['504', '503', 'timeout']):
+                        delay = min(base_delay * (2 ** retry_count), self.retry_config['max_delay'])
+                        request_stats['total_delay'] += delay
+                        logger.warning(f"DeepSeek API 超时或服务不可用，第 {retry_count} 次重试，等待 {delay} 秒...")
+                        await asyncio.sleep(delay)
+                        continue
+                    
+                    # 只记录非超时的错误
+                    if not any(code in str(e) for code in ['504', '503', 'timeout']):
+                        logger.error(f"处理 DeepSeek 流时发生错误: {e}", exc_info=True)
+                    await claude_queue.put("")
+                    break
+                except asyncio.TimeoutError as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        delay = min(base_delay * (2 ** retry_count), 30)
+                        logger.warning(f"读取超时，第 {retry_count} 次重试，等待 {delay} 秒...")
+                        await asyncio.sleep(delay)
+                        continue
+                    logger.error(f"读取超时，达到最大重试次数: {e}", exc_info=True)
+                    await claude_queue.put("")
+                    break
+            
+            logger.info("DeepSeek 任务处理完成，标记结束")
+            await output_queue.put(None)
+            
+            duration = time.time() - start_time
+            logger.info(
+                f"DeepSeek 请求统计:\n"
+                f"总耗时: {duration:.2f}秒\n"
+                f"重试次数: {request_stats['retries']}\n"
+                f"总延迟: {request_stats['total_delay']}秒\n"
+                f"错误记录: {request_stats['errors']}"
+            )
 
         async def process_claude():
             """处理 Claude 流的异步函数
@@ -284,6 +340,23 @@ class DeepClaude:
                 # 移除系统消息，因为某些 API 提供商可能不支持
                 claude_messages = [message for message in claude_messages if message.get("role", "") != "system"]
 
+                # 确保消息列表非空且格式正确
+                if not claude_messages:
+                    logger.error("Claude 消息列表为空")
+                    return
+                    
+                # 确保消息格式符合 Claude API 要求
+                claude_messages = [{
+                    "role": msg.get("role", "user"),
+                    "content": msg.get("content", "").strip()
+                } for msg in claude_messages if msg.get("content", "").strip()]
+                
+                if not claude_messages:
+                    logger.error("处理后的 Claude 消息列表为空")
+                    return
+                    
+                logger.debug(f"发送给 Claude 的消息: {claude_messages}")
+                
                 logger.info(f"开始处理 Claude 流，使用模型: {claude_model}, 提供商: {self.claude_client.provider}")
 
                 # 调用 Claude API 获取回答
@@ -320,14 +393,44 @@ class DeepClaude:
         
         # 等待两个任务完成，通过计数判断
         finished_tasks = 0
+        error_occurred = False
+        
         while finished_tasks < 2:
-            item = await output_queue.get()
-            if item is None:
-                finished_tasks += 1
-                continue
-            logger.debug(f"自定义api向外发送 token: {item}")
-            yield item
-
+            try:
+                item = await output_queue.get()
+                if item is None:
+                    finished_tasks += 1
+                    continue
+                    
+                if isinstance(item, Exception):
+                    error_occurred = True
+                    logger.error(f"任务执行出错: {item}")
+                    continue
+                    
+                logger.debug(f"自定义api向外发送 token: {item}")
+                yield item
+                
+            except Exception as e:
+                logger.error(f"处理输出队列时发生错误: {e}")
+                error_occurred = True
+                
+        if error_occurred:
+            # 发送错误提示给客户端
+            error_response = {
+                "id": chat_id,
+                "object": "chat.completion.chunk",
+                "created": created_time,
+                "model": "error",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": "\n\n抱歉，处理过程中出现错误，请稍后重试。"
+                    }
+                }]
+            }
+            yield f"data: {json.dumps(error_response)}\n\n".encode('utf-8')
+        
         # 发送完成标记
         yield b'data: [DONE]\n\n'
 
