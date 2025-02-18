@@ -1,3 +1,4 @@
+# Core dependencies (cross-platform)
 aiohappyeyeballs==2.4.6
 aiohttp==3.11.12
 aiosignal==1.3.2
@@ -39,7 +40,9 @@ torchvision==0.21.0
 typing_extensions==4.12.2
 urllib3==2.3.0
 uvicorn==0.34.0
-uvloop==0.21.0
 watchfiles==1.0.4
 websockets==14.2
 yarl==1.18.3
+
+# System-specific dependencies
+uvloop==0.21.0; sys_platform != 'win32'  # 只在非 Windows 系统安装
