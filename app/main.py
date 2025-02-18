@@ -7,6 +7,24 @@ from dotenv import load_dotenv  # 用于加载.env文件中的环境变量
 # 从.env文件中读取配置，支持本地开发环境和生产环境的配置分离
 load_dotenv()
 
+# 设置代理配置
+def setup_proxy():
+    """设置代理配置
+    根据环境变量ENABLE_PROXY的值来设置或清除系统代理
+    """
+    enable_proxy = os.getenv('ENABLE_PROXY', 'false').lower() == 'true'
+    if enable_proxy:
+        # 设置代理
+        os.environ['HTTP_PROXY'] = os.getenv('HTTP_PROXY', '')
+        os.environ['HTTPS_PROXY'] = os.getenv('HTTPS_PROXY', '')
+    else:
+        # 清除代理
+        os.environ.pop('HTTP_PROXY', None)
+        os.environ.pop('HTTPS_PROXY', None)
+
+# 在导入FastAPI之前设置代理
+setup_proxy()
+
 # 导入FastAPI相关依赖
 from fastapi import FastAPI, Depends, Request  # FastAPI框架核心组件
 from fastapi.responses import StreamingResponse  # 用于处理流式响应

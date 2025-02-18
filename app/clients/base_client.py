@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Any  # 类型提示，用于异步生成器�
 import aiohttp  # 异步HTTP客户端库
 from app.utils.logger import logger  # 日志记录器
 from abc import ABC, abstractmethod  # 抽象基类和抽象方法装饰器
+import os  # 系统模块，用于获取环境变量
 
 
 class BaseClient(ABC):
@@ -24,22 +25,30 @@ class BaseClient(ABC):
         self.api_url = api_url
         
     async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
-        """发送 API 请求并处理响应
-        
-        Args:
-            headers: 请求头
-            data: 请求数据
-            
-        Yields:
-            bytes: 响应数据流
-        """
         try:
-            async with aiohttp.ClientSession() as session:
+            # 获取代理设置
+            proxy = os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
+            
+            # 创建 TCP 连接器，设置代理
+            connector = aiohttp.TCPConnector(
+                ssl=False,  # 如果需要禁用 SSL 验证
+                force_close=True  # 强制关闭连接，避免连接池问题
+            )
+            
+            async with aiohttp.ClientSession(connector=connector) as session:
                 logger.debug(f"正在发送请求到: {self.api_url}")
+                logger.debug(f"使用代理: {proxy}")
                 logger.debug(f"请求头: {headers}")
                 logger.debug(f"请求数据: {data}")
                 
-                async with session.post(self.api_url, headers=headers, json=data) as response:
+                # 在请求中使用代理
+                async with session.post(
+                    self.api_url,
+                    headers=headers,
+                    json=data,
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=30)  # 设置超时时间
+                ) as response:
                     if response.status != 200:
                         error_text = await response.text()
                         error_msg = (
@@ -50,7 +59,7 @@ class BaseClient(ABC):
                         )
                         logger.error(error_msg)
                         raise aiohttp.ClientError(error_msg)
-                        
+                    
                     async for chunk in response.content.iter_any():
                         if not chunk:
                             logger.warning("收到空响应块")

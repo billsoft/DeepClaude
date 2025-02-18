@@ -36,13 +36,11 @@ RUN pip install --no-cache-dir \
 COPY ./app ./app
 
 # 暴露端口
-# 声明容器将使用8211端口
-# 这只是一个声明，实际运行时还需要通过-p参数映射端口
-EXPOSE 8211
+# 声明容器将使用1124端口
+EXPOSE 1124
 
-# 启动命令
 # python -m uvicorn：通过Python模块的方式启动uvicorn服务器
 # app.main:app：指定FastAPI应用的导入路径，格式为"模块路径:应用实例变量名"
 # --host 0.0.0.0：允许来自任何IP的访问（不仅仅是localhost）
-# --port 8211：指定服务器监听的端口号
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8211"]
+# --port 1124：指定服务器监听的端口号
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1124"]

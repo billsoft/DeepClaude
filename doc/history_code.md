@@ -2,31 +2,31 @@
 ```
 .
 ├── Dockerfile
+├── .github/
+│   ├── workflows/
 ├── app/
 │   ├── main.py
 │   ├── clients/
 │   │   ├── base_client.py
-│   │   ├── __init__.py
-│   │   ├── deepseek_client.py
 │   │   ├── claude_client.py
+│   │   ├── deepseek_client.py
+│   │   ├── __init__.py
+│   ├── deepclaude/
+│   │   ├── deepclaude.py
+│   │   ├── __init__.py
 │   ├── utils/
 │   │   ├── auth.py
 │   │   ├── logger.py
 │   │   ├── message_processor.py
-│   ├── deepclaude/
-│   │   ├── __init__.py
-│   │   ├── deepclaude.py
-├── test/
-│   ├── test_deepseek_client.py
-│   ├── test_claude_client.py
-├── .github/
-│   ├── workflows/
 ├── doc/
+├── test/
+│   ├── test_claude_client.py
+│   ├── test_deepseek_client.py
 ```
 
 # Web服务器层
 
-## .../app/main.py
+## ...\app\main.py
 ```python
 import os
 import sys
@@ -172,7 +172,7 @@ def get_and_validate_params(body: dict) -> tuple:
  return (temperature, top_p, presence_penalty, frequency_penalty, stream)```
 ______________________________
 
-## .../clients/base_client.py
+## ...\clients\base_client.py
 ```python
 from typing import AsyncGenerator, Any
 import aiohttp
@@ -217,90 +217,7 @@ class BaseClient(ABC):
  pass```
 ______________________________
 
-## .../clients/__init__.py
-```python
-from .base_client import BaseClient
-from .deepseek_client import DeepSeekClient
-from .claude_client import ClaudeClient
-__all__ = ['BaseClient', 'DeepSeekClient', 'ClaudeClient']```
-______________________________
-
-## .../clients/deepseek_client.py
-```python
-import json
-from typing import AsyncGenerator
-from app.utils.logger import logger
-from .base_client import BaseClient
-VALID_MODELS = ["deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-Chat-7B"]
-class DeepSeekClient(BaseClient):
- def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
- super().__init__(api_key, api_url)
- self.provider = provider
- self.default_model = "deepseek-ai/DeepSeek-R1"
- def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
- has_start = "<think>" in content
- has_end = "</think>" in content
- if has_start and has_end:
- return True, content
- elif has_start:
- return False, content
- elif not has_start and not has_end:
- return False, content
- else:
- return True, content
- async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
- if model not in VALID_MODELS:
- error_msg = f"无效的模型名称: {model}，可用模型: {VALID_MODELS}"
- logger.error(error_msg)
- raise ValueError(error_msg)
- headers = {
- "Authorization": f"Bearer {self.api_key}",
- "Content-Type": "application/json",
- "Accept": "text/event-stream",
- }
- data = {
- "model": model,
- "messages": messages,
- "stream": True,
- }
- logger.debug(f"开始流式对话：{data}")
- try:
- async for chunk in self._make_request(headers, data):
- chunk_str = chunk.decode('utf-8')
- if not chunk_str.strip():
- continue
- for line in chunk_str.splitlines():
- if line.startswith("data: "):
- json_str = line[len("data: "):]
- if json_str == "[DONE]":
- return
- try:
- data = json.loads(json_str)
- if not data or not data.get("choices") or not data["choices"][0].get("delta"):
- continue
- delta = data["choices"][0]["delta"]
- if is_origin_reasoning:
- if delta.get("reasoning_content"):
- content = delta["reasoning_content"]
- logger.debug(f"提取推理内容：{content}")
- yield "reasoning", content
- elif delta.get("content"):
- content = delta["content"]
- logger.info(f"提取内容信息，推理阶段结束: {content}")
- yield "content", content
- else:
- if delta.get("content"):
- content = delta["content"]
- yield "content", content
- except json.JSONDecodeError as e:
- logger.error(f"JSON 解析错误: {e}")
- continue
- except Exception as e:
- logger.error(f"流式对话发生错误: {e}", exc_info=True)
- raise```
-______________________________
-
-## .../clients/claude_client.py
+## ...\clients\claude_client.py
 ```python
 import json
 from typing import AsyncGenerator
@@ -409,143 +326,90 @@ class ClaudeClient(BaseClient):
  continue```
 ______________________________
 
-## .../utils/auth.py
+## ...\clients\deepseek_client.py
 ```python
-from fastapi import HTTPException, Header
-from typing import Optional
-import os
-from dotenv import load_dotenv
+import json
+from typing import AsyncGenerator
 from app.utils.logger import logger
-logger.info(f"当前工作目录: {os.getcwd()}")
-logger.info("尝试加载.env文件...")
-load_dotenv(override=True)
-ALLOW_API_KEY = os.getenv("ALLOW_API_KEY")
-logger.info(f"ALLOW_API_KEY环境变量状态: {'已设置' if ALLOW_API_KEY else '未设置'}")
-if not ALLOW_API_KEY:
- raise ValueError("ALLOW_API_KEY environment variable is not set")
-logger.info(f"Loaded API key starting with: {ALLOW_API_KEY[:4] if len(ALLOW_API_KEY) >= 4 else ALLOW_API_KEY}")
-async def verify_api_key(authorization: Optional[str] = Header(None)) -> None:
- if authorization is None:
- logger.warning("请求缺少Authorization header")
- raise HTTPException(
- status_code=401,
- detail="Missing Authorization header"
- )
- api_key = authorization.replace("Bearer ", "").strip()
- if api_key != ALLOW_API_KEY:
- logger.warning(f"无效的API密钥: {api_key}")
- raise HTTPException(
- status_code=401,
- detail="Invalid API key"
- )
- logger.info("API密钥验证通过")```
-______________________________
-
-## .../utils/logger.py
-```python
-import logging
-import colorlog
-import sys
-import os
-from dotenv import load_dotenv
-load_dotenv()
-def get_log_level() -> int:
- level_map = {
- 'DEBUG': logging.DEBUG,
- 'INFO': logging.INFO,
- 'WARNING': logging.WARNING,
- 'ERROR': logging.ERROR,
- 'CRITICAL': logging.CRITICAL
+from .base_client import BaseClient
+VALID_MODELS = ["deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-Chat-7B"]
+class DeepSeekClient(BaseClient):
+ def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
+ super().__init__(api_key, api_url)
+ self.provider = provider
+ self.default_model = "deepseek-ai/DeepSeek-R1"
+ def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
+ has_start = "<think>" in content
+ has_end = "</think>" in content
+ if has_start and has_end:
+ return True, content
+ elif has_start:
+ return False, content
+ elif not has_start and not has_end:
+ return False, content
+ else:
+ return True, content
+ async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
+ if model not in VALID_MODELS:
+ error_msg = f"无效的模型名称: {model}，可用模型: {VALID_MODELS}"
+ logger.error(error_msg)
+ raise ValueError(error_msg)
+ headers = {
+ "Authorization": f"Bearer {self.api_key}",
+ "Content-Type": "application/json",
+ "Accept": "text/event-stream",
  }
- level = os.getenv('LOG_LEVEL', 'INFO').upper()
- return level_map.get(level, logging.INFO)
-def setup_logger(name: str = "DeepClaude") -> logging.Logger:
- logger = colorlog.getLogger(name)
- if logger.handlers:
- return logger
- log_level = get_log_level()
- logger.setLevel(log_level)
- console_handler = logging.StreamHandler(sys.stdout)
- console_handler.setLevel(log_level)
- formatter = colorlog.ColoredFormatter(
- "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
- datefmt="%Y-%m-%d %H:%M:%S",
- log_colors={
- 'DEBUG': 'cyan',
- 'INFO': 'green',
- 'WARNING': 'yellow',
- 'ERROR': 'red',
- 'CRITICAL': 'red,bg_white',
+ data = {
+ "model": model,
+ "messages": messages,
+ "stream": True,
  }
- )
- console_handler.setFormatter(formatter)
- logger.addHandler(console_handler)
- return logger
-logger = setup_logger()```
-______________________________
-
-## .../utils/message_processor.py
-```python
-from typing import List, Dict
-from app.utils.logger import logger
-class MessageProcessor:
- @staticmethod
- def convert_to_deepseek_format(messages: List[Dict]) -> List[Dict]:
- processed = []
- temp_content = []
- current_role = None
- for msg in messages:
- role = msg.get("role", "")
- content = msg.get("content", "")
- if not content:
+ logger.debug(f"开始流式对话：{data}")
+ try:
+ async for chunk in self._make_request(headers, data):
+ chunk_str = chunk.decode('utf-8')
+ if not chunk_str.strip():
  continue
- if role == "system":
- if processed and processed[0]["role"] == "system":
- processed[0]["content"] += f"\n{content}"
- else:
- processed.insert(0, {"role": "system", "content": content})
+ for line in chunk_str.splitlines():
+ if line.startswith("data: "):
+ json_str = line[len("data: "):]
+ if json_str == "[DONE]":
+ return
+ try:
+ data = json.loads(json_str)
+ if not data or not data.get("choices") or not data["choices"][0].get("delta"):
  continue
- if role == current_role:
- temp_content.append(content)
+ delta = data["choices"][0]["delta"]
+ if is_origin_reasoning:
+ if delta.get("reasoning_content"):
+ content = delta["reasoning_content"]
+ logger.debug(f"提取推理内容：{content}")
+ yield "reasoning", content
+ elif delta.get("content"):
+ content = delta["content"]
+ logger.info(f"提取内容信息，推理阶段结束: {content}")
+ yield "content", content
  else:
- if temp_content:
- processed.append({
- "role": current_role,
- "content": "\n".join(temp_content)
- })
- temp_content = [content]
- current_role = role
- if temp_content:
- processed.append({
- "role": current_role,
- "content": "\n".join(temp_content)
- })
- final_messages = []
- for i, msg in enumerate(processed):
- if i > 0 and msg["role"] == final_messages[-1]["role"]:
- if msg["role"] == "user":
- final_messages.append({"role": "assistant", "content": "请继续。"})
- else:
- final_messages.append({"role": "user", "content": "请继续。"})
- final_messages.append(msg)
- logger.debug(f"转换后的消息格式: {final_messages}")
- return final_messages
- @staticmethod
- def validate_messages(messages: List[Dict]) -> bool:
- if not messages:
- return False
- for i in range(1, len(messages)):
- if messages[i]["role"] == messages[i-1]["role"]:
- return False
- return True```
+ if delta.get("content"):
+ content = delta["content"]
+ yield "content", content
+ except json.JSONDecodeError as e:
+ logger.error(f"JSON 解析错误: {e}")
+ continue
+ except Exception as e:
+ logger.error(f"流式对话发生错误: {e}", exc_info=True)
+ raise```
 ______________________________
 
-## .../deepclaude/__init__.py
+## ...\clients\__init__.py
 ```python
-```
+from .base_client import BaseClient
+from .deepseek_client import DeepSeekClient
+from .claude_client import ClaudeClient
+__all__ = ['BaseClient', 'DeepSeekClient', 'ClaudeClient']```
 ______________________________
 
-## .../deepclaude/deepclaude.py
+## ...\deepclaude\deepclaude.py
 ```python
 import json
 import time
@@ -869,7 +733,186 @@ class DeepClaude:
  raise e```
 ______________________________
 
-## .../test/test_deepseek_client.py
+## ...\deepclaude\__init__.py
+```python
+```
+______________________________
+
+## ...\utils\auth.py
+```python
+from fastapi import HTTPException, Header
+from typing import Optional
+import os
+from dotenv import load_dotenv
+from app.utils.logger import logger
+logger.info(f"当前工作目录: {os.getcwd()}")
+logger.info("尝试加载.env文件...")
+load_dotenv(override=True)
+ALLOW_API_KEY = os.getenv("ALLOW_API_KEY")
+logger.info(f"ALLOW_API_KEY环境变量状态: {'已设置' if ALLOW_API_KEY else '未设置'}")
+if not ALLOW_API_KEY:
+ raise ValueError("ALLOW_API_KEY environment variable is not set")
+logger.info(f"Loaded API key starting with: {ALLOW_API_KEY[:4] if len(ALLOW_API_KEY) >= 4 else ALLOW_API_KEY}")
+async def verify_api_key(authorization: Optional[str] = Header(None)) -> None:
+ if authorization is None:
+ logger.warning("请求缺少Authorization header")
+ raise HTTPException(
+ status_code=401,
+ detail="Missing Authorization header"
+ )
+ api_key = authorization.replace("Bearer ", "").strip()
+ if api_key != ALLOW_API_KEY:
+ logger.warning(f"无效的API密钥: {api_key}")
+ raise HTTPException(
+ status_code=401,
+ detail="Invalid API key"
+ )
+ logger.info("API密钥验证通过")```
+______________________________
+
+## ...\utils\logger.py
+```python
+import logging
+import colorlog
+import sys
+import os
+from dotenv import load_dotenv
+load_dotenv()
+def get_log_level() -> int:
+ level_map = {
+ 'DEBUG': logging.DEBUG,
+ 'INFO': logging.INFO,
+ 'WARNING': logging.WARNING,
+ 'ERROR': logging.ERROR,
+ 'CRITICAL': logging.CRITICAL
+ }
+ level = os.getenv('LOG_LEVEL', 'INFO').upper()
+ return level_map.get(level, logging.INFO)
+def setup_logger(name: str = "DeepClaude") -> logging.Logger:
+ logger = colorlog.getLogger(name)
+ if logger.handlers:
+ return logger
+ log_level = get_log_level()
+ logger.setLevel(log_level)
+ console_handler = logging.StreamHandler(sys.stdout)
+ console_handler.setLevel(log_level)
+ formatter = colorlog.ColoredFormatter(
+ "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+ datefmt="%Y-%m-%d %H:%M:%S",
+ log_colors={
+ 'DEBUG': 'cyan',
+ 'INFO': 'green',
+ 'WARNING': 'yellow',
+ 'ERROR': 'red',
+ 'CRITICAL': 'red,bg_white',
+ }
+ )
+ console_handler.setFormatter(formatter)
+ logger.addHandler(console_handler)
+ return logger
+logger = setup_logger()```
+______________________________
+
+## ...\utils\message_processor.py
+```python
+from typing import List, Dict
+from app.utils.logger import logger
+class MessageProcessor:
+ @staticmethod
+ def convert_to_deepseek_format(messages: List[Dict]) -> List[Dict]:
+ processed = []
+ temp_content = []
+ current_role = None
+ for msg in messages:
+ role = msg.get("role", "")
+ content = msg.get("content", "")
+ if not content:
+ continue
+ if role == "system":
+ if processed and processed[0]["role"] == "system":
+ processed[0]["content"] += f"\n{content}"
+ else:
+ processed.insert(0, {"role": "system", "content": content})
+ continue
+ if role == current_role:
+ temp_content.append(content)
+ else:
+ if temp_content:
+ processed.append({
+ "role": current_role,
+ "content": "\n".join(temp_content)
+ })
+ temp_content = [content]
+ current_role = role
+ if temp_content:
+ processed.append({
+ "role": current_role,
+ "content": "\n".join(temp_content)
+ })
+ final_messages = []
+ for i, msg in enumerate(processed):
+ if i > 0 and msg["role"] == final_messages[-1]["role"]:
+ if msg["role"] == "user":
+ final_messages.append({"role": "assistant", "content": "请继续。"})
+ else:
+ final_messages.append({"role": "user", "content": "请继续。"})
+ final_messages.append(msg)
+ logger.debug(f"转换后的消息格式: {final_messages}")
+ return final_messages
+ @staticmethod
+ def validate_messages(messages: List[Dict]) -> bool:
+ if not messages:
+ return False
+ for i in range(1, len(messages)):
+ if messages[i]["role"] == messages[i-1]["role"]:
+ return False
+ return True```
+______________________________
+
+## ...\test\test_claude_client.py
+```python
+import os
+import sys
+import asyncio
+from dotenv import load_dotenv
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+from app.clients.claude_client import ClaudeClient
+from app.utils.logger import logger
+load_dotenv()
+async def test_claude_stream():
+ api_key = os.getenv("CLAUDE_API_KEY")
+ api_url = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
+ provider = os.getenv("CLAUDE_PROVIDER", "anthropic")
+ logger.info(f"API URL: {api_url}")
+ logger.info(f"API Key 是否存在: {bool(api_key)}")
+ logger.info(f"Provider: {provider}")
+ if not api_key:
+ logger.error("请在 .env 文件中设置 CLAUDE_API_KEY")
+ return
+ messages = [
+ {"role": "user", "content": "1+1等于几?"}
+ ]
+ client = ClaudeClient(api_key, api_url, provider)
+ try:
+ logger.info("开始测试 Claude 流式输出...")
+ async for content_type, content in client.stream_chat(
+ messages=messages,
+ model_arg=(0.7, 0.9, 0, 0),
+ model="claude-3-5-sonnet-20241022"
+ ):
+ if content_type == "answer":
+ logger.info(f"收到回答内容: {content}")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+ logger.error(f"错误类型: {type(e)}")
+def main():
+ asyncio.run(test_claude_stream())
+if __name__ == "__main__":
+ main()```
+______________________________
+
+## ...\test\test_deepseek_client.py
 ```python
 import os
 import sys
@@ -916,52 +959,9 @@ if __name__ == "__main__":
  main()```
 ______________________________
 
-## .../test/test_claude_client.py
-```python
-import os
-import sys
-import asyncio
-from dotenv import load_dotenv
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, project_root)
-from app.clients.claude_client import ClaudeClient
-from app.utils.logger import logger
-load_dotenv()
-async def test_claude_stream():
- api_key = os.getenv("CLAUDE_API_KEY")
- api_url = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
- provider = os.getenv("CLAUDE_PROVIDER", "anthropic")
- logger.info(f"API URL: {api_url}")
- logger.info(f"API Key 是否存在: {bool(api_key)}")
- logger.info(f"Provider: {provider}")
- if not api_key:
- logger.error("请在 .env 文件中设置 CLAUDE_API_KEY")
- return
- messages = [
- {"role": "user", "content": "1+1等于几?"}
- ]
- client = ClaudeClient(api_key, api_url, provider)
- try:
- logger.info("开始测试 Claude 流式输出...")
- async for content_type, content in client.stream_chat(
- messages=messages,
- model_arg=(0.7, 0.9, 0, 0),
- model="claude-3-5-sonnet-20241022"
- ):
- if content_type == "answer":
- logger.info(f"收到回答内容: {content}")
- except Exception as e:
- logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
- logger.error(f"错误类型: {type(e)}")
-def main():
- asyncio.run(test_claude_stream())
-if __name__ == "__main__":
- main()```
-______________________________
-
 # 配置文件
 
-## ./Dockerfile
+## .\Dockerfile
 ```dockerfile
 # 使用 Python 3.11 slim 版本作为基础镜像
 # slim版本是一个轻量级的Python镜像，只包含运行Python应用所必需的组件
