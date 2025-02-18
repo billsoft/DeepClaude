@@ -555,6 +555,7 @@ from typing import AsyncGenerator
 from app.utils.logger import logger
 from app.clients import DeepSeekClient, ClaudeClient
 from app.utils.message_processor import MessageProcessor
+import aiohttp
 class DeepClaude:
  def __init__(
  self,
@@ -575,6 +576,11 @@ class DeepClaude:
  provider=claude_provider
  )
  self.is_origin_reasoning = is_origin_reasoning
+ self.retry_config = {
+ 'max_retries': 5,
+ 'base_delay': 2,
+ 'max_delay': 30
+ }
  async def chat_completions_with_stream(
  self,
  messages: list,
@@ -605,8 +611,18 @@ class DeepClaude:
  claude_queue = asyncio.Queue()
  reasoning_content = []
  async def process_deepseek():
- logger.info(f"开始处理 DeepSeek 流，使用模型：{deepseek_model}, 提供商: {self.deepseek_client.provider}")
+ start_time = time.time()
+ request_stats = {
+ 'retries': 0,
+ 'total_delay': 0,
+ 'errors': []
+ }
+ retry_count = 0
+ max_retries = self.retry_config['max_retries']
+ base_delay = self.retry_config['base_delay']
+ while retry_count < max_retries:
  try:
+ logger.info(f"开始处理 DeepSeek 流，使用模型：{deepseek_model}, 提供商: {self.deepseek_client.provider}")
  start_response = {
  "id": chat_id,
  "object": "chat.completion.chunk",
@@ -661,12 +677,41 @@ class DeepClaude:
  logger.info(f"DeepSeek 推理完成，收集到的推理内容长度：{len(''.join(reasoning_content))}")
  await claude_queue.put("".join(reasoning_content))
  break
- except Exception as e:
+ break
+ except aiohttp.ClientError as e:
+ retry_count += 1
+ request_stats['retries'] += 1
+ request_stats['errors'].append(str(e))
+ if any(code in str(e) for code in ['504', '503', 'timeout']):
+ delay = min(base_delay * (2 ** retry_count), self.retry_config['max_delay'])
+ request_stats['total_delay'] += delay
+ logger.warning(f"DeepSeek API 超时或服务不可用，第 {retry_count} 次重试，等待 {delay} 秒...")
+ await asyncio.sleep(delay)
+ continue
+ if not any(code in str(e) for code in ['504', '503', 'timeout']):
  logger.error(f"处理 DeepSeek 流时发生错误: {e}", exc_info=True)
  await claude_queue.put("")
- finally:
+ break
+ except asyncio.TimeoutError as e:
+ retry_count += 1
+ if retry_count < max_retries:
+ delay = min(base_delay * (2 ** retry_count), 30)
+ logger.warning(f"读取超时，第 {retry_count} 次重试，等待 {delay} 秒...")
+ await asyncio.sleep(delay)
+ continue
+ logger.error(f"读取超时，达到最大重试次数: {e}", exc_info=True)
+ await claude_queue.put("")
+ break
  logger.info("DeepSeek 任务处理完成，标记结束")
  await output_queue.put(None)
+ duration = time.time() - start_time
+ logger.info(
+ f"DeepSeek 请求统计:\n"
+ f"总耗时: {duration:.2f}秒\n"
+ f"重试次数: {request_stats['retries']}\n"
+ f"总延迟: {request_stats['total_delay']}秒\n"
+ f"错误记录: {request_stats['errors']}"
+ )
  async def process_claude():
  try:
  logger.info("等待获取 DeepSeek 的推理内容...")
@@ -683,6 +728,17 @@ class DeepClaude:
  fixed_content = f"Here's my original input:\n{original_content}\n\n{combined_content}"
  last_message["content"] = fixed_content
  claude_messages = [message for message in claude_messages if message.get("role", "") != "system"]
+ if not claude_messages:
+ logger.error("Claude 消息列表为空")
+ return
+ claude_messages = [{
+ "role": msg.get("role", "user"),
+ "content": msg.get("content", "").strip()
+ } for msg in claude_messages if msg.get("content", "").strip()]
+ if not claude_messages:
+ logger.error("处理后的 Claude 消息列表为空")
+ return
+ logger.debug(f"发送给 Claude 的消息: {claude_messages}")
  logger.info(f"开始处理 Claude 流，使用模型: {claude_model}, 提供商: {self.claude_client.provider}")
  async for content_type, content in self.claude_client.stream_chat(
  messages=claude_messages,
@@ -711,13 +767,37 @@ class DeepClaude:
  deepseek_task = asyncio.create_task(process_deepseek())
  claude_task = asyncio.create_task(process_claude())
  finished_tasks = 0
+ error_occurred = False
  while finished_tasks < 2:
+ try:
  item = await output_queue.get()
  if item is None:
  finished_tasks += 1
  continue
+ if isinstance(item, Exception):
+ error_occurred = True
+ logger.error(f"任务执行出错: {item}")
+ continue
  logger.debug(f"自定义api向外发送 token: {item}")
  yield item
+ except Exception as e:
+ logger.error(f"处理输出队列时发生错误: {e}")
+ error_occurred = True
+ if error_occurred:
+ error_response = {
+ "id": chat_id,
+ "object": "chat.completion.chunk",
+ "created": created_time,
+ "model": "error",
+ "choices": [{
+ "index": 0,
+ "delta": {
+ "role": "assistant",
+ "content": "\n\n抱歉，处理过程中出现错误，请稍后重试。"
+ }
+ }]
+ }
+ yield f"data: {json.dumps(error_response)}\n\n".encode('utf-8')
  yield b'data: [DONE]\n\n'
  async def chat_completions_without_stream(
  self,
@@ -899,9 +979,15 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
  PYTHONDONTWRITEBYTECODE=1
 
-# 安装依赖
+# 安装项目依赖包
 # --no-cache-dir：不缓存pip下载的包，减少镜像大小
 # 指定精确的版本号以确保构建的一致性和可重现性
+# aiohttp: 用于异步HTTP请求
+# colorlog: 用于彩色日志输出
+# fastapi: Web框架
+# python-dotenv: 用于加载.env环境变量
+# tiktoken: OpenAI的分词器
+# uvicorn: ASGI服务器
 RUN pip install --no-cache-dir \
  aiohttp==3.11.11 \
  colorlog==6.9.0 \
@@ -915,15 +1001,15 @@ RUN pip install --no-cache-dir \
 COPY ./app ./app
 
 # 暴露端口
-# 声明容器将使用8000端口
+# 声明容器将使用8211端口
 # 这只是一个声明，实际运行时还需要通过-p参数映射端口
-EXPOSE 8000
+EXPOSE 8211
 
 # 启动命令
 # python -m uvicorn：通过Python模块的方式启动uvicorn服务器
 # app.main:app：指定FastAPI应用的导入路径，格式为"模块路径:应用实例变量名"
 # --host 0.0.0.0：允许来自任何IP的访问（不仅仅是localhost）
-# --port 8000：指定服务器监听的端口号
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --port 8211：指定服务器监听的端口号
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8211"]
 ```
 ______________________________
