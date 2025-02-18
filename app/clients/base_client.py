@@ -24,10 +24,23 @@ class BaseClient(ABC):
         self.api_key = api_key
         self.api_url = api_url
         
+    @abstractmethod
+    def _get_proxy_config(self) -> tuple[bool, str | None]:
+        """获取代理配置
+        
+        由子类实现的抽象方法，用于获取特定客户端的代理配置。
+        
+        Returns:
+            tuple[bool, str | None]: 返回一个元组，包含：
+                - bool: 是否启用代理
+                - str | None: 代理地址，如果不启用代理则为None
+        """
+        pass
+        
     async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
         try:
-            # 获取代理设置
-            proxy = os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
+            # 从子类获取代理配置
+            use_proxy, proxy = self._get_proxy_config()
             
             # 创建 TCP 连接器，设置代理
             connector = aiohttp.TCPConnector(
@@ -46,7 +59,7 @@ class BaseClient(ABC):
                     self.api_url,
                     headers=headers,
                     json=data,
-                    proxy=proxy,
+                    proxy=proxy if use_proxy else None,
                     timeout=aiohttp.ClientTimeout(total=30)  # 设置超时时间
                 ) as response:
                     if response.status != 200:

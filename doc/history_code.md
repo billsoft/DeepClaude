@@ -2,6 +2,7 @@
 ```
 .
 ├── Dockerfile
+├── main.py
 ├── .github/
 │   ├── workflows/
 ├── app/
@@ -26,12 +27,81 @@
 
 # Web服务器层
 
+## main.py
+```python
+import os
+import uvicorn
+from dotenv import load_dotenv
+load_dotenv()
+def setup_proxy():
+ enable_proxy = os.getenv('ENABLE_PROXY', 'false').lower() == 'true'
+ if enable_proxy:
+ os.environ['HTTP_PROXY'] = os.getenv('HTTP_PROXY', '')
+ os.environ['HTTPS_PROXY'] = os.getenv('HTTPS_PROXY', '')
+ else:
+ os.environ.pop('HTTP_PROXY', None)
+ os.environ.pop('HTTPS_PROXY', None)
+def main():
+ setup_proxy()
+ host = os.getenv('HOST', '0.0.0.0')
+ port = int(os.getenv('PORT', 1124))
+ reload = os.getenv('RELOAD', 'false').lower() == 'true'
+ uvicorn.run(
+ 'app.main:app',
+ host=host,
+ port=port,
+ reload=reload,
+ loop='uvloop' if os.name != 'nt' else 'asyncio'
+ )
+if __name__ == '__main__':
+ main()```
+______________________________
+
+## .\main.py
+```python
+import os
+import uvicorn
+from dotenv import load_dotenv
+load_dotenv()
+def setup_proxy():
+ enable_proxy = os.getenv('ENABLE_PROXY', 'false').lower() == 'true'
+ if enable_proxy:
+ os.environ['HTTP_PROXY'] = os.getenv('HTTP_PROXY', '')
+ os.environ['HTTPS_PROXY'] = os.getenv('HTTPS_PROXY', '')
+ else:
+ os.environ.pop('HTTP_PROXY', None)
+ os.environ.pop('HTTPS_PROXY', None)
+def main():
+ setup_proxy()
+ host = os.getenv('HOST', '0.0.0.0')
+ port = int(os.getenv('PORT', 1124))
+ reload = os.getenv('RELOAD', 'false').lower() == 'true'
+ uvicorn.run(
+ 'app.main:app',
+ host=host,
+ port=port,
+ reload=reload,
+ loop='uvloop' if os.name != 'nt' else 'asyncio'
+ )
+if __name__ == '__main__':
+ main()```
+______________________________
+
 ## ...\app\main.py
 ```python
 import os
 import sys
 from dotenv import load_dotenv
 load_dotenv()
+def setup_proxy():
+ enable_proxy = os.getenv('ENABLE_PROXY', 'false').lower() == 'true'
+ if enable_proxy:
+ os.environ['HTTP_PROXY'] = os.getenv('HTTP_PROXY', '')
+ os.environ['HTTPS_PROXY'] = os.getenv('HTTPS_PROXY', '')
+ else:
+ os.environ.pop('HTTP_PROXY', None)
+ os.environ.pop('HTTPS_PROXY', None)
+setup_proxy()
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -1001,15 +1071,13 @@ RUN pip install --no-cache-dir \
 COPY ./app ./app
 
 # 暴露端口
-# 声明容器将使用8211端口
-# 这只是一个声明，实际运行时还需要通过-p参数映射端口
-EXPOSE 8211
+# 声明容器将使用1124端口
+EXPOSE 1124
 
-# 启动命令
 # python -m uvicorn：通过Python模块的方式启动uvicorn服务器
 # app.main:app：指定FastAPI应用的导入路径，格式为"模块路径:应用实例变量名"
 # --host 0.0.0.0：允许来自任何IP的访问（不仅仅是localhost）
-# --port 8211：指定服务器监听的端口号
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8211"]
+# --port 1124：指定服务器监听的端口号
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1124"]
 ```
 ______________________________

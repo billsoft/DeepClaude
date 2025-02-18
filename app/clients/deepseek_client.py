@@ -11,8 +11,7 @@ import json  # 用于JSON数据处理
 from typing import AsyncGenerator  # 异步生成器类型
 from app.utils.logger import logger  # 日志记录器
 from .base_client import BaseClient  # 导入基础客户端类
-
-VALID_MODELS = ["deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-Chat-7B"]
+import os
 
 class DeepSeekClient(BaseClient):
     def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
@@ -30,6 +29,22 @@ class DeepSeekClient(BaseClient):
         self.provider = provider
         self.default_model = "deepseek-ai/DeepSeek-R1"  # 添加默认模型
         
+    def _get_proxy_config(self) -> tuple[bool, str | None]:
+        """获取 DeepSeek 客户端的代理配置
+        
+        从环境变量中读取 DeepSeek 专用的代理配置。
+        如果没有配置专用代理，则返回不使用代理。
+        
+        Returns:
+            tuple[bool, str | None]: 返回代理配置信息
+        """
+        enable_proxy = os.getenv('DEEPSEEK_ENABLE_PROXY', 'false').lower() == 'true'
+        if enable_proxy:
+            http_proxy = os.getenv('HTTP_PROXY')
+            https_proxy = os.getenv('HTTPS_PROXY')
+            return True, https_proxy or http_proxy
+        return False, None
+    
     def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
         """处理包含 think 标签的内容
         
@@ -57,33 +72,6 @@ class DeepSeekClient(BaseClient):
             return True, content
             
     async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
-        """流式对话
-        
-        实现与DeepSeek API的流式对话功能，支持以下特性：
-        1. 实时输出模型的推理过程和最终回答
-        2. 支持原始推理模式和普通对话模式
-        3. 自动处理流式响应和特殊标签
-        4. 错误处理和日志记录
-        
-        Args:
-            messages: 消息列表，包含对话历史和当前输入
-            model: 模型名称，默认使用DeepSeek-R1模型
-            is_origin_reasoning: 是否使用原始推理模式，默认为True
-                - True: 分别输出推理过程和最终答案
-                - False: 只输出普通对话内容
-            
-        Yields:
-            tuple[str, str]: 返回(内容类型, 内容)的元组
-                内容类型: 
-                    - "reasoning" - 表示模型的推理过程
-                    - "content" - 表示模型的最终答案
-                内容: 实际的文本内容
-        """
-        if model not in VALID_MODELS:
-            error_msg = f"无效的模型名称: {model}，可用模型: {VALID_MODELS}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-        
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

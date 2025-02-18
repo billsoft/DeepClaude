@@ -32,17 +32,9 @@
 import os
 import uvicorn
 from dotenv import load_dotenv
+from app.utils.logger import logger
 load_dotenv()
-def setup_proxy():
- enable_proxy = os.getenv('ENABLE_PROXY', 'false').lower() == 'true'
- if enable_proxy:
- os.environ['HTTP_PROXY'] = os.getenv('HTTP_PROXY', '')
- os.environ['HTTPS_PROXY'] = os.getenv('HTTPS_PROXY', '')
- else:
- os.environ.pop('HTTP_PROXY', None)
- os.environ.pop('HTTPS_PROXY', None)
 def main():
- setup_proxy()
  host = os.getenv('HOST', '0.0.0.0')
  port = int(os.getenv('PORT', 1124))
  reload = os.getenv('RELOAD', 'false').lower() == 'true'
@@ -62,17 +54,9 @@ ______________________________
 import os
 import uvicorn
 from dotenv import load_dotenv
+from app.utils.logger import logger
 load_dotenv()
-def setup_proxy():
- enable_proxy = os.getenv('ENABLE_PROXY', 'false').lower() == 'true'
- if enable_proxy:
- os.environ['HTTP_PROXY'] = os.getenv('HTTP_PROXY', '')
- os.environ['HTTPS_PROXY'] = os.getenv('HTTPS_PROXY', '')
- else:
- os.environ.pop('HTTP_PROXY', None)
- os.environ.pop('HTTPS_PROXY', None)
 def main():
- setup_proxy()
  host = os.getenv('HOST', '0.0.0.0')
  port = int(os.getenv('PORT', 1124))
  reload = os.getenv('RELOAD', 'false').lower() == 'true'
@@ -248,17 +232,33 @@ from typing import AsyncGenerator, Any
 import aiohttp
 from app.utils.logger import logger
 from abc import ABC, abstractmethod
+import os
 class BaseClient(ABC):
  def __init__(self, api_key: str, api_url: str):
  self.api_key = api_key
  self.api_url = api_url
+ @abstractmethod
+ def _get_proxy_config(self) -> tuple[bool, str | None]:
+ pass
  async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
  try:
- async with aiohttp.ClientSession() as session:
+ use_proxy, proxy = self._get_proxy_config()
+ connector = aiohttp.TCPConnector(
+ ssl=False,
+ force_close=True
+ )
+ async with aiohttp.ClientSession(connector=connector) as session:
  logger.debug(f"正在发送请求到: {self.api_url}")
+ logger.debug(f"使用代理: {proxy}")
  logger.debug(f"请求头: {headers}")
  logger.debug(f"请求数据: {data}")
- async with session.post(self.api_url, headers=headers, json=data) as response:
+ async with session.post(
+ self.api_url,
+ headers=headers,
+ json=data,
+ proxy=proxy if use_proxy else None,
+ timeout=aiohttp.ClientTimeout(total=30)
+ ) as response:
  if response.status != 200:
  error_text = await response.text()
  error_msg = (
@@ -293,10 +293,18 @@ import json
 from typing import AsyncGenerator
 from app.utils.logger import logger
 from .base_client import BaseClient
+import os
 class ClaudeClient(BaseClient):
  def __init__(self, api_key: str, api_url: str = "https://api.anthropic.com/v1/messages", provider: str = "anthropic"):
  super().__init__(api_key, api_url)
  self.provider = provider
+ def _get_proxy_config(self) -> tuple[bool, str | None]:
+ enable_proxy = os.getenv('CLAUDE_ENABLE_PROXY', 'false').lower() == 'true'
+ if enable_proxy:
+ http_proxy = os.getenv('HTTP_PROXY')
+ https_proxy = os.getenv('HTTPS_PROXY')
+ return True, https_proxy or http_proxy
+ return False, None
  async def stream_chat(
  self,
  messages: list,
@@ -402,12 +410,19 @@ import json
 from typing import AsyncGenerator
 from app.utils.logger import logger
 from .base_client import BaseClient
-VALID_MODELS = ["deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-Chat-7B"]
+import os
 class DeepSeekClient(BaseClient):
  def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
  super().__init__(api_key, api_url)
  self.provider = provider
  self.default_model = "deepseek-ai/DeepSeek-R1"
+ def _get_proxy_config(self) -> tuple[bool, str | None]:
+ enable_proxy = os.getenv('DEEPSEEK_ENABLE_PROXY', 'false').lower() == 'true'
+ if enable_proxy:
+ http_proxy = os.getenv('HTTP_PROXY')
+ https_proxy = os.getenv('HTTPS_PROXY')
+ return True, https_proxy or http_proxy
+ return False, None
  def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
  has_start = "<think>" in content
  has_end = "</think>" in content
@@ -420,10 +435,6 @@ class DeepSeekClient(BaseClient):
  else:
  return True, content
  async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
- if model not in VALID_MODELS:
- error_msg = f"无效的模型名称: {model}，可用模型: {VALID_MODELS}"
- logger.error(error_msg)
- raise ValueError(error_msg)
  headers = {
  "Authorization": f"Bearer {self.api_key}",
  "Content-Type": "application/json",

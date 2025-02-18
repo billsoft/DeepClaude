@@ -11,6 +11,7 @@ import json  # 用于JSON数据处理
 from typing import AsyncGenerator  # 异步生成器类型
 from app.utils.logger import logger  # 日志记录器
 from .base_client import BaseClient  # 导入基础客户端类
+import os  # 系统环境变量处理模块
 
 
 class ClaudeClient(BaseClient):
@@ -29,6 +30,21 @@ class ClaudeClient(BaseClient):
         """
         super().__init__(api_key, api_url)
         self.provider = provider
+    def _get_proxy_config(self) -> tuple[bool, str | None]:
+        """获取 Claude 客户端的代理配置
+        
+        从环境变量中读取 Claude 专用的代理配置。
+        如果没有配置专用代理，则返回不使用代理。
+        
+        Returns:
+            tuple[bool, str | None]: 返回代理配置信息
+        """
+        enable_proxy = os.getenv('CLAUDE_ENABLE_PROXY', 'false').lower() == 'true'
+        if enable_proxy:
+            http_proxy = os.getenv('HTTP_PROXY')
+            https_proxy = os.getenv('HTTPS_PROXY')
+            return True, https_proxy or http_proxy
+        return False, None
 
     async def stream_chat(
         self,
