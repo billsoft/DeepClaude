@@ -34,5 +34,21 @@ async def test_ollama_stream():
         logger.error(f"测试过程中发生错误: {e}", exc_info=True)
         raise
 
+async def test_ollama_connection():
+    """测试 Ollama 连接"""
+    api_url = os.getenv("OLLAMA_API_URL")
+    assert api_url, "OLLAMA_API_URL 未设置"
+    
+    client = OllamaR1Client(api_url)
+    messages = [{"role": "user", "content": "测试连接"}]
+    
+    try:
+        async for _, _ in client.stream_chat(messages):
+            pass
+        return True
+    except Exception as e:
+        logger.error(f"Ollama 连接测试失败: {e}")
+        return False
+
 if __name__ == "__main__":
     asyncio.run(test_ollama_stream())

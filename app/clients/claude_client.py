@@ -43,7 +43,16 @@ class ClaudeClient(BaseClient):
         if enable_proxy:
             http_proxy = os.getenv('HTTP_PROXY')
             https_proxy = os.getenv('HTTPS_PROXY')
+            
+            # 添加代理日志
+            if https_proxy or http_proxy:
+                logger.info(f"Claude 客户端使用代理: {https_proxy or http_proxy}")
+            else:
+                logger.warning("已启用 Claude 代理但未设置代理地址")
+            
             return True, https_proxy or http_proxy
+        
+        logger.debug("Claude 客户端未启用代理")
         return False, None
 
     async def stream_chat(
@@ -182,3 +191,34 @@ class ClaudeClient(BaseClient):
                         raise ValueError(f"不支持的Claude Provider: {self.provider}")
                 except json.JSONDecodeError:
                     continue
+
+    async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+        """获取推理过程
+        
+        由于 Claude 不直接提供推理过程，这个方法仅用于满足基类接口要求。
+        实际的推理过程应该由 DeepSeek 或 Ollama 客户端提供。
+        
+        Args:
+            messages: 对话消息列表
+            model: 使用的模型名称
+            **kwargs: 额外参数，包括：
+                - model_arg: 模型参数元组 (temperature, top_p, presence_penalty, frequency_penalty)
+                
+        Yields:
+            tuple[str, str]: (content_type, content)
+                - content_type: "content" 表示普通内容
+                - content: 具体内容
+                
+        Note:
+            Claude 客户端主要用于生成最终答案，不提供推理过程。
+            这个方法的实现仅用于满足接口要求。
+        """
+        model_arg = kwargs.get('model_arg', (0.7, 0.9, 0, 0))
+        async for content_type, content in self.stream_chat(
+            messages=messages,
+            model_arg=model_arg,
+            model=model,
+            stream=True
+        ):
+            if content_type == "answer":
+                yield "content", content

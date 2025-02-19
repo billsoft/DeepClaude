@@ -26,6 +26,14 @@ async def test_claude_stream():
     logger.info(f"API Key 是否存在: {bool(api_key)}")
     logger.info(f"Provider: {provider}")
     
+    # 添加代理配置检查
+    enable_proxy = os.getenv('CLAUDE_ENABLE_PROXY', 'false').lower() == 'true'
+    if enable_proxy:
+        proxy = os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
+        logger.info(f"代理已启用: {proxy}")
+    else:
+        logger.info("代理未启用")
+    
     if not api_key:
         logger.error("请在 .env 文件中设置 CLAUDE_API_KEY")
         return

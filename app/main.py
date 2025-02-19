@@ -101,18 +101,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 添加 Ollama 配置获取
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL")
+if not OLLAMA_API_URL and os.getenv('REASONING_PROVIDER') == 'ollama':
+    logger.critical("使用 Ollama 推理时必须设置 OLLAMA_API_URL")
+    sys.exit(1)
+
 # 创建 DeepClaude 实例, 提出为Global变量
 if not DEEPSEEK_API_KEY or not CLAUDE_API_KEY:
     logger.critical("请设置环境变量 CLAUDE_API_KEY 和 DEEPSEEK_API_KEY")
     sys.exit(1)
 
 deep_claude = DeepClaude(
-    DEEPSEEK_API_KEY,
-    CLAUDE_API_KEY,
-    DEEPSEEK_API_URL,
-    CLAUDE_API_URL,
-    CLAUDE_PROVIDER,
-    IS_ORIGIN_REASONING
+    deepseek_api_key=DEEPSEEK_API_KEY,
+    claude_api_key=CLAUDE_API_KEY,
+    deepseek_api_url=DEEPSEEK_API_URL,
+    claude_api_url=CLAUDE_API_URL,
+    claude_provider=CLAUDE_PROVIDER,
+    is_origin_reasoning=IS_ORIGIN_REASONING,
+    ollama_api_url=OLLAMA_API_URL
 )
 
 # 验证日志级别

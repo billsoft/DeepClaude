@@ -11,6 +11,7 @@ import json
 from typing import AsyncGenerator
 from app.utils.logger import logger
 from .base_client import BaseClient
+import asyncio
 
 class OllamaR1Client(BaseClient):
     def __init__(self, api_url: str = "http://localhost:11434"):
@@ -23,6 +24,10 @@ class OllamaR1Client(BaseClient):
         Args:
             api_url: Ollama服务地址，默认为本地地址
         """
+        # 添加参数验证
+        if not api_url:
+            raise ValueError("必须提供 Ollama API URL")
+            
         # 确保API URL以/api/chat结尾
         if not api_url.endswith("/api/chat"):
             api_url = f"{api_url.rstrip('/')}/api/chat"
@@ -59,6 +64,10 @@ class OllamaR1Client(BaseClient):
             return True, content
             
     async def stream_chat(self, messages: list, model: str = "deepseek-r1:32b") -> AsyncGenerator[tuple[str, str], None]:
+        # 添加参数验证
+        if not messages:
+            raise ValueError("消息列表不能为空")
+            
         headers = {
             "Content-Type": "application/json",
         }
@@ -76,61 +85,105 @@ class OllamaR1Client(BaseClient):
         
         logger.debug(f"开始流式对话：{data}")
         
-        try:
-            current_content = ""
-            async for chunk in self._make_request(headers, data):
-                chunk_str = chunk.decode('utf-8')
-                if not chunk_str.strip():
-                    continue
-                
-                try:
-                    response = json.loads(chunk_str)
-                    if response.get("done"):
-                        # 最后一个chunk，确保处理完所有内容
-                        if current_content:
-                            is_complete, content = self._process_think_tag_content(current_content)
-                            if is_complete:
-                                # 提取<think>标签之间的内容
-                                start_idx = content.find("<think>") + 7
-                                end_idx = content.find("</think>")
-                                yield "reasoning", content[start_idx:end_idx].strip()
-                            else:
-                                yield "content", content
-                        return
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                current_content = ""
+                async for chunk in self._make_request(headers, data):
+                    chunk_str = chunk.decode('utf-8')
+                    if not chunk_str.strip():
+                        continue
                     
-                    if "message" in response and "content" in response["message"]:
-                        content = response["message"]["content"]
-                        current_content += content
-                        # 检查是否有完整的think标签对
-                        is_complete, processed_content = self._process_think_tag_content(current_content)
-                        if is_complete:
-                            # 提取<think>标签之间的内容
-                            start_idx = current_content.find("<think>") + 7
-                            end_idx = current_content.find("</think>")
-                            yield "reasoning", current_content[start_idx:end_idx].strip()
-                            # 重置current_content为剩余的内容
-                            current_content = current_content[end_idx + 8:].strip()
-                        elif "<think>" not in current_content:
-                            # 只有在确定没有任何think标签时才输出普通内容
-                            yield "content", content
+                    try:
+                        response = json.loads(chunk_str)
+                        if response.get("done"):
+                            # 最后一个chunk，确保处理完所有内容
+                            if current_content:
+                                is_complete, content = self._process_think_tag_content(current_content)
+                                if is_complete:
+                                    # 修复：确保有think标签时才提取推理内容
+                                    if "<think>" in content and "</think>" in content:
+                                        start_idx = content.find("<think>") + 7
+                                        end_idx = content.find("</think>")
+                                        if start_idx < end_idx:  # 确保标签位置正确
+                                            yield "reasoning", content[start_idx:end_idx].strip()
+                                    else:
+                                        yield "content", content
+                                else:
+                                    yield "content", content
+                            return
+                        
+                        if "message" in response and "content" in response["message"]:
+                            content = response["message"]["content"]
+                            current_content += content
                             
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON 解析错误: {e}")
-                    continue
+                            # 修复：改进think标签处理逻辑
+                            if "<think>" in current_content and "</think>" in current_content:
+                                # 找到所有完整的think标签对
+                                while "<think>" in current_content and "</think>" in current_content:
+                                    start_idx = current_content.find("<think>")
+                                    end_idx = current_content.find("</think>")
+                                    
+                                    if start_idx < end_idx:
+                                        # 提取并输出推理内容
+                                        reasoning = current_content[start_idx + 7:end_idx].strip()
+                                        if reasoning:
+                                            yield "reasoning", reasoning
+                                        
+                                        # 更新current_content，移除已处理的部分
+                                        current_content = current_content[end_idx + 8:].strip()
+                                    else:
+                                        break
+                            
+                            # 如果剩余内容中没有think标签，作为普通内容输出
+                            if current_content and "<think>" not in current_content:
+                                yield "content", current_content
+                                current_content = ""
+                                
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON 解析错误: {e}")
+                        continue
                     
-        except Exception as e:
-            logger.error(f"流式对话发生错误: {e}", exc_info=True)
-            raise
-    def _get_proxy_config(self) -> tuple[bool, str | None]:
-        """获取代理配置
+                break  # 成功则跳出循环
+                
+            except asyncio.TimeoutError:
+                retry_count += 1
+                if retry_count < max_retries:
+                    delay = 2 ** retry_count  # 指数退避
+                    logger.warning(f"请求超时，第 {retry_count} 次重试，等待 {delay} 秒...")
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("达到最大重试次数，放弃请求")
+                raise
+            except Exception as e:
+                logger.error(f"流式对话发生错误: {e}", exc_info=True)
+                raise
+    async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+        """获取推理过程
         
-        由于Ollama是本地服务，默认不需要代理。
-        如果需要代理，可以通过OLLAMA_PROXY环境变量设置。
-        
-        Returns:
-            tuple[bool, str | None]: 返回一个元组，包含：
-                - bool: 是否启用代理
-                - str | None: 代理地址，如果不启用代理则为None
+        Args:
+            messages: 对话消息列表
+            model: 使用的模型名称
+            **kwargs: 额外参数
+            
+        Yields:
+            tuple[str, str]: (content_type, content)
+                - content_type: "reasoning" 表示推理过程，"content" 表示最终答案
+                - content: 具体内容
         """
+        async for content_type, content in self.stream_chat(
+            messages=messages,
+            model=model
+        ):
+            if content_type in ("reasoning", "content"):
+                yield content_type, content
+    def _get_proxy_config(self) -> tuple[bool, str | None]:
+        """获取代理配置"""
         proxy = os.getenv("OLLAMA_PROXY")
+        if proxy:
+            logger.info(f"Ollama 客户端使用代理: {proxy}")
+        else:
+            logger.debug("Ollama 客户端未启用代理")
         return bool(proxy), proxy

@@ -42,7 +42,9 @@ class DeepSeekClient(BaseClient):
         if enable_proxy:
             http_proxy = os.getenv('HTTP_PROXY')
             https_proxy = os.getenv('HTTPS_PROXY')
+            logger.info(f"DeepSeek 客户端使用代理: {https_proxy or http_proxy}")
             return True, https_proxy or http_proxy
+        logger.debug("DeepSeek 客户端未启用代理")
         return False, None
     
     def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
@@ -124,3 +126,25 @@ class DeepSeekClient(BaseClient):
         except Exception as e:
             logger.error(f"流式对话发生错误: {e}", exc_info=True)
             raise
+            
+    async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+        """获取 DeepSeek 的推理过程
+        
+        Args:
+            messages: 对话消息列表
+            model: 使用的模型名称
+            **kwargs: 额外参数
+            
+        Yields:
+            Tuple[str, str]: (content_type, content)
+                - content_type: "reasoning" 表示推理过程，"content" 表示最终答案
+                - content: 具体内容
+        """
+        is_origin_reasoning = kwargs.get('is_origin_reasoning', True)
+        async for content_type, content in self.stream_chat(
+            messages=messages,
+            model=model,
+            is_origin_reasoning=is_origin_reasoning
+        ):
+            if content_type in ("reasoning", "content"):
+                yield content_type, content
