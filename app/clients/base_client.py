@@ -54,6 +54,18 @@ class BaseClient(ABC):
         """
         pass
     
+    @abstractmethod
+    def _extract_reasoning(self, content: str) -> tuple[bool, str]:
+        """从内容中提取推理过程
+        
+        Args:
+            content: 原始内容
+            
+        Returns:
+            tuple[bool, str]: (是否包含完整推理, 推理内容)
+        """
+        pass
+    
     async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
         try:
             # 获取代理配置 - 由子类实现具体逻辑

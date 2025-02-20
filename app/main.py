@@ -79,12 +79,17 @@ CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messa
 # DEEPSEEK_API_KEY: DeepSeek API访问密钥
 # DEEPSEEK_API_URL: DeepSeek API的访问地址
 # DEEPSEEK_MODEL: 使用的DeepSeek模型版本
+# DEEPSEEK_PROVIDER: DeepSeek 提供商, 默认为 deepseek
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1")
+DEEPSEEK_PROVIDER = os.getenv("DEEPSEEK_PROVIDER", "deepseek")
 
-# 是否使用原始推理格式，默认为True
-IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
+# 是否使用原始推理格式
+IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "false").lower() == "true"
+
+# 获取思考者提供商配置
+REASONING_PROVIDER = os.getenv("REASONING_PROVIDER", "deepseek").lower()
 
 # CORS中间件配置
 # allow_origins_list: 允许的源列表，从ALLOW_ORIGINS环境变量解析
@@ -103,23 +108,36 @@ app.add_middleware(
 
 # 添加 Ollama 配置获取
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL")
-if not OLLAMA_API_URL and os.getenv('REASONING_PROVIDER') == 'ollama':
+if REASONING_PROVIDER == 'ollama' and not OLLAMA_API_URL:
     logger.critical("使用 Ollama 推理时必须设置 OLLAMA_API_URL")
     sys.exit(1)
 
-# 创建 DeepClaude 实例, 提出为Global变量
-if not DEEPSEEK_API_KEY or not CLAUDE_API_KEY:
-    logger.critical("请设置环境变量 CLAUDE_API_KEY 和 DEEPSEEK_API_KEY")
+# 验证必要的配置
+if REASONING_PROVIDER == 'deepseek' and not DEEPSEEK_API_KEY:
+    logger.critical("使用 DeepSeek 推理时必须设置 DEEPSEEK_API_KEY")
     sys.exit(1)
 
+if not CLAUDE_API_KEY:
+    logger.critical("必须设置 CLAUDE_API_KEY")
+    sys.exit(1)
+
+# 创建 DeepClaude 实例
 deep_claude = DeepClaude(
-    deepseek_api_key=DEEPSEEK_API_KEY,
+    # Claude配置(回答者)
     claude_api_key=CLAUDE_API_KEY,
-    deepseek_api_url=DEEPSEEK_API_URL,
     claude_api_url=CLAUDE_API_URL,
     claude_provider=CLAUDE_PROVIDER,
-    is_origin_reasoning=IS_ORIGIN_REASONING,
-    ollama_api_url=OLLAMA_API_URL
+    
+    # DeepSeek配置(思考者选项1)
+    deepseek_api_key=DEEPSEEK_API_KEY,
+    deepseek_api_url=DEEPSEEK_API_URL,
+    deepseek_provider=DEEPSEEK_PROVIDER,
+    
+    # Ollama配置(思考者选项2)
+    ollama_api_url=OLLAMA_API_URL,
+    
+    # 思考格式配置
+    is_origin_reasoning=IS_ORIGIN_REASONING
 )
 
 # 验证日志级别

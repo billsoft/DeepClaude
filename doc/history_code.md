@@ -3,6 +3,8 @@
 .
 ├── Dockerfile
 ├── main.py
+├── .cursor/
+│   ├── rules/
 ├── .github/
 │   ├── workflows/
 ├── app/
@@ -25,6 +27,7 @@
 │   ├── test_claude_client.py
 │   ├── test_deepclaude.py
 │   ├── test_deepseek_client.py
+│   ├── test_nvidia_deepseek.py
 │   ├── test_ollama_r1.py
 ```
 
@@ -38,7 +41,7 @@ from dotenv import load_dotenv
 from app.utils.logger import logger
 load_dotenv()
 def main():
- host = os.getenv('HOST', '0.0.0.0')
+ host = os.getenv('HOST', '::')
  port = int(os.getenv('PORT', 1124))
  reload = os.getenv('RELOAD', 'false').lower() == 'true'
  uvicorn.run(
@@ -60,7 +63,7 @@ from dotenv import load_dotenv
 from app.utils.logger import logger
 load_dotenv()
 def main():
- host = os.getenv('HOST', '0.0.0.0')
+ host = os.getenv('HOST', '::')
  port = int(os.getenv('PORT', 1124))
  reload = os.getenv('RELOAD', 'false').lower() == 'true'
  uvicorn.run(
@@ -104,7 +107,9 @@ CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messa
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1")
-IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
+DEEPSEEK_PROVIDER = os.getenv("DEEPSEEK_PROVIDER", "deepseek")
+IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "false").lower() == "true"
+REASONING_PROVIDER = os.getenv("REASONING_PROVIDER", "deepseek").lower()
 allow_origins_list = ALLOW_ORIGINS.split(",") if ALLOW_ORIGINS else []
 app.add_middleware(
  CORSMiddleware,
@@ -114,20 +119,24 @@ app.add_middleware(
  allow_headers=["*"],
 )
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL")
-if not OLLAMA_API_URL and os.getenv('REASONING_PROVIDER') == 'ollama':
+if REASONING_PROVIDER == 'ollama' and not OLLAMA_API_URL:
  logger.critical("使用 Ollama 推理时必须设置 OLLAMA_API_URL")
  sys.exit(1)
-if not DEEPSEEK_API_KEY or not CLAUDE_API_KEY:
- logger.critical("请设置环境变量 CLAUDE_API_KEY 和 DEEPSEEK_API_KEY")
+if REASONING_PROVIDER == 'deepseek' and not DEEPSEEK_API_KEY:
+ logger.critical("使用 DeepSeek 推理时必须设置 DEEPSEEK_API_KEY")
+ sys.exit(1)
+if not CLAUDE_API_KEY:
+ logger.critical("必须设置 CLAUDE_API_KEY")
  sys.exit(1)
 deep_claude = DeepClaude(
- deepseek_api_key=DEEPSEEK_API_KEY,
  claude_api_key=CLAUDE_API_KEY,
- deepseek_api_url=DEEPSEEK_API_URL,
  claude_api_url=CLAUDE_API_URL,
  claude_provider=CLAUDE_PROVIDER,
- is_origin_reasoning=IS_ORIGIN_REASONING,
- ollama_api_url=OLLAMA_API_URL
+ deepseek_api_key=DEEPSEEK_API_KEY,
+ deepseek_api_url=DEEPSEEK_API_URL,
+ deepseek_provider=DEEPSEEK_PROVIDER,
+ ollama_api_url=OLLAMA_API_URL,
+ is_origin_reasoning=IS_ORIGIN_REASONING
 )
 logger.debug("当前日志级别为 DEBUG")
 logger.info("开始请求")
@@ -257,6 +266,9 @@ class BaseClient(ABC):
  @abstractmethod
  async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
  pass
+ @abstractmethod
+ def _extract_reasoning(self, content: str) -> tuple[bool, str]:
+ pass
  async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
  try:
  use_proxy, proxy = self._get_proxy_config()
@@ -272,7 +284,8 @@ class BaseClient(ABC):
  )
  async with aiohttp.ClientSession(connector=connector) as session:
  logger.debug(f"正在发送请求到: {self.api_url}")
- logger.debug(f"使用代理: {proxy if use_proxy else '不使用代理'}")
+ if use_proxy:
+ logger.debug(f"使用代理: {proxy}")
  async with session.post(
  self.api_url,
  headers=headers,
@@ -306,7 +319,9 @@ import os
 class ClaudeClient(BaseClient):
  def __init__(self, api_key: str, api_url: str = "https://api.anthropic.com/v1/messages", provider: str = "anthropic"):
  super().__init__(api_key, api_url)
- self.provider = provider
+ self.provider = provider.lower()
+ def _extract_reasoning(self, content: str) -> tuple[bool, str]:
+ return False, ""
  def _get_proxy_config(self) -> tuple[bool, str | None]:
  enable_proxy = os.getenv('CLAUDE_ENABLE_PROXY', 'false').lower() == 'true'
  if enable_proxy:
@@ -319,63 +334,36 @@ class ClaudeClient(BaseClient):
  return True, https_proxy or http_proxy
  logger.debug("Claude 客户端未启用代理")
  return False, None
- async def stream_chat(
- self,
- messages: list,
- model_arg: tuple[float, float, float, float],
- model: str,
- stream: bool = True
- ) -> AsyncGenerator[tuple[str, str], None]:
- if self.provider == "openrouter":
- model = "anthropic/claude-3.5-sonnet"
- headers = {
- "Authorization": f"Bearer {self.api_key}",
- "Content-Type": "application/json",
- "HTTP-Referer": "https://github.com/ErlichLiu/DeepClaude",
- "X-Title": "DeepClaude"
- }
- data = {
- "model": model,
- "messages": messages,
- "stream": stream,
- "temperature": 1 if model_arg[0] < 0 or model_arg[0] > 1 else model_arg[0],
- "top_p": model_arg[1],
- "presence_penalty": model_arg[2],
- "frequency_penalty": model_arg[3]
- }
- elif self.provider == "oneapi":
- headers = {
- "Authorization": f"Bearer {self.api_key}",
- "Content-Type": "application/json"
- }
- data = {
- "model": model,
- "messages": messages,
- "stream": stream,
- "temperature": 1 if model_arg[0] < 0 or model_arg[0] > 1 else model_arg[0],
- "top_p": model_arg[1],
- "presence_penalty": model_arg[2],
- "frequency_penalty": model_arg[3]
- }
- elif self.provider == "anthropic":
+ async def stream_chat(self, messages: list, **kwargs):
+ if self.provider == "anthropic":
  headers = {
  "x-api-key": self.api_key,
  "anthropic-version": "2023-06-01",
  "content-type": "application/json",
- "accept": "text/event-stream" if stream else "application/json",
+ "anthropic-beta": "messages-2023-12-15"
  }
+ formatted_messages = []
+ for msg in messages:
+ if msg["role"] == "user":
+ formatted_messages.append({
+ "role": "user",
+ "content": msg["content"]
+ })
+ elif msg["role"] == "assistant":
+ formatted_messages.append({
+ "role": "assistant",
+ "content": msg["content"]
+ })
  data = {
- "model": model,
- "messages": messages,
- "max_tokens": 8192,
- "stream": stream,
- "temperature": 1 if model_arg[0] < 0 or model_arg[0] > 1 else model_arg[0],
- "top_p": model_arg[1]
+ "model": kwargs.get('model', 'claude-3-5-sonnet-20241022'),
+ "messages": formatted_messages,
+ "max_tokens": kwargs.get('max_tokens', 8192),
+ "temperature": kwargs.get('temperature', 0.7),
+ "top_p": kwargs.get('top_p', 0.9),
+ "stream": True
  }
- else:
- raise ValueError(f"不支持的Claude Provider: {self.provider}")
- logger.debug(f"开始对话：{data}")
- if stream:
+ logger.debug(f"Claude请求数据: {data}")
+ try:
  async for chunk in self._make_request(headers, data):
  chunk_str = chunk.decode('utf-8')
  if not chunk_str.strip():
@@ -386,46 +374,33 @@ class ClaudeClient(BaseClient):
  if json_str.strip() == '[DONE]':
  return
  try:
- data = json.loads(json_str)
- if self.provider in ("openrouter", "oneapi"):
- content = data.get('choices', [{}])[0].get('delta', {}).get('content', '')
+ response = json.loads(json_str)
+ if response.get('type') == 'content_block_delta':
+ content = response.get('delta', {}).get('text', '')
  if content:
  yield "answer", content
- elif self.provider == "anthropic":
- if data.get('type') == 'content_block_delta':
- content = data.get('delta', {}).get('text', '')
- if content:
- yield "answer", content
- else:
- raise ValueError(f"不支持的Claude Provider: {self.provider}")
  except json.JSONDecodeError:
  continue
- else:
- async for chunk in self._make_request(headers, data):
- try:
- response = json.loads(chunk.decode('utf-8'))
- if self.provider in ("openrouter", "oneapi"):
- content = response.get('choices', [{}])[0].get('message', {}).get('content', '')
- if content:
- yield "answer", content
- elif self.provider == "anthropic":
- content = response.get('content', [{}])[0].get('text', '')
- if content:
- yield "answer", content
+ except Exception as e:
+ logger.error(f"Claude请求失败: {e}")
+ raise
+ elif self.provider == "openrouter":
+ headers = {
+ "Authorization": f"Bearer {self.api_key}",
+ "Content-Type": "application/json",
+ "HTTP-Referer": "https://github.com/ErlichLiu/DeepClaude",
+ "X-Title": "DeepClaude"
+ }
+ elif self.provider == "oneapi":
+ headers = {
+ "Authorization": f"Bearer {self.api_key}",
+ "Content-Type": "application/json"
+ }
  else:
  raise ValueError(f"不支持的Claude Provider: {self.provider}")
- except json.JSONDecodeError:
- continue
  async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
- model_arg = kwargs.get('model_arg', (0.7, 0.9, 0, 0))
- async for content_type, content in self.stream_chat(
- messages=messages,
- model_arg=model_arg,
- model=model,
- stream=True
- ):
- if content_type == "answer":
- yield "content", content```
+ return
+ yield```
 ______________________________
 
 ## ...\clients\deepseek_client.py
@@ -436,10 +411,29 @@ from app.utils.logger import logger
 from .base_client import BaseClient
 import os
 class DeepSeekClient(BaseClient):
- def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
+ def __init__(self, api_key: str, api_url: str = None, provider: str = None):
+ self.provider = provider or os.getenv('DEEPSEEK_PROVIDER', 'deepseek')
+ self.provider_configs = {
+ 'deepseek': {
+ 'url': 'https://api.deepseek.com/v1/chat/completions',
+ 'model': 'deepseek-reasoner'
+ },
+ 'siliconflow': {
+ 'url': 'https://api.siliconflow.cn/v1/chat/completions',
+ 'model': 'deepseek-ai/DeepSeek-R1'
+ },
+ 'nvidia': {
+ 'url': 'https://integrate.api.nvidia.com/v1/chat/completions',
+ 'model': 'deepseek-ai/deepseek-r1'
+ }
+ }
+ if self.provider not in self.provider_configs:
+ raise ValueError(f"不支持的 provider: {self.provider}")
+ config = self.provider_configs[self.provider]
+ api_url = api_url or os.getenv('DEEPSEEK_API_URL') or config['url']
  super().__init__(api_key, api_url)
- self.provider = provider
- self.default_model = "deepseek-ai/DeepSeek-R1"
+ self.default_model = config['model']
+ self.is_origin_reasoning = os.getenv('IS_ORIGIN_REASONING', 'false').lower() == 'true'
  def _get_proxy_config(self) -> tuple[bool, str | None]:
  enable_proxy = os.getenv('DEEPSEEK_ENABLE_PROXY', 'false').lower() == 'true'
  if enable_proxy:
@@ -460,7 +454,23 @@ class DeepSeekClient(BaseClient):
  return False, content
  else:
  return True, content
- async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
+ def _extract_reasoning(self, content: str) -> tuple[bool, str]:
+ if self.is_origin_reasoning:
+ if "reasoning_content" in content:
+ return True, content["reasoning_content"]
+ return False, ""
+ else:
+ if "<think>" in content and "</think>" in content:
+ start = content.find("<think>") + 7
+ end = content.find("</think>")
+ if start < end:
+ return True, content[start:end].strip()
+ return False, ""
+ async def stream_chat(self, messages: list, model: str = None, model_arg: tuple = None) -> AsyncGenerator[tuple[str, str], None]:
+ if not model:
+ model = self.default_model
+ if not model:
+ raise ValueError("未指定模型且无默认模型")
  headers = {
  "Authorization": f"Bearer {self.api_key}",
  "Content-Type": "application/json",
@@ -471,9 +481,57 @@ class DeepSeekClient(BaseClient):
  "messages": messages,
  "stream": True,
  }
+ if self.provider == 'nvidia':
+ temperature = model_arg[0] if model_arg else 0.6
+ top_p = model_arg[1] if model_arg else 0.7
+ data.update({
+ "temperature": temperature,
+ "top_p": top_p,
+ "max_tokens": 4096
+ })
  logger.debug(f"开始流式对话：{data}")
  try:
  async for chunk in self._make_request(headers, data):
+ chunk_str = chunk.decode('utf-8')
+ if not chunk_str.strip():
+ continue
+ try:
+ data = json.loads(chunk_str)
+ if not data or not data.get("choices") or not data["choices"][0].get("delta"):
+ continue
+ delta = data["choices"][0]["delta"]
+ has_reasoning, reasoning = self._extract_reasoning(delta)
+ if has_reasoning:
+ yield "reasoning", reasoning
+ except json.JSONDecodeError:
+ continue
+ except Exception as e:
+ logger.error(f"流式对话发生错误: {e}", exc_info=True)
+ raise
+ async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+ model_arg = kwargs.get('model_arg')
+ headers = {
+ "Authorization": f"Bearer {self.api_key}",
+ "Content-Type": "application/json",
+ "Accept": "text/event-stream",
+ }
+ data = {
+ "model": model,
+ "messages": messages,
+ "stream": True,
+ }
+ if self.provider == 'nvidia':
+ temperature = model_arg[0] if model_arg else 0.6
+ top_p = model_arg[1] if model_arg else 0.7
+ data.update({
+ "temperature": temperature,
+ "top_p": top_p,
+ "max_tokens": 4096
+ })
+ reasoning_buffer = []
+ content_buffer = []
+ async for chunk in self._make_request(headers, data):
+ try:
  chunk_str = chunk.decode('utf-8')
  if not chunk_str.strip():
  continue
@@ -481,40 +539,30 @@ class DeepSeekClient(BaseClient):
  if line.startswith("data: "):
  json_str = line[len("data: "):]
  if json_str == "[DONE]":
- return
- try:
+ continue
  data = json.loads(json_str)
  if not data or not data.get("choices") or not data["choices"][0].get("delta"):
  continue
  delta = data["choices"][0]["delta"]
- if is_origin_reasoning:
- if delta.get("reasoning_content"):
- content = delta["reasoning_content"]
- logger.debug(f"提取推理内容：{content}")
- yield "reasoning", content
- elif delta.get("content"):
- content = delta["content"]
- logger.info(f"提取内容信息，推理阶段结束: {content}")
- yield "content", content
+ content = delta.get("content", "")
+ if self.is_origin_reasoning:
+ if "reasoning_content" in delta:
+ yield "reasoning", delta["reasoning_content"]
  else:
- if delta.get("content"):
- content = delta["content"]
+ if "<think>" in content:
+ start = content.find("<think>") + len("<think>")
+ end = content.find("</think>")
+ if end > start:
+ reasoning = content[start:end].strip()
+ if reasoning:
+ yield "reasoning", reasoning
+ elif content:
  yield "content", content
- except json.JSONDecodeError as e:
- logger.error(f"JSON 解析错误: {e}")
+ except json.JSONDecodeError:
  continue
  except Exception as e:
- logger.error(f"流式对话发生错误: {e}", exc_info=True)
- raise
- async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
- is_origin_reasoning = kwargs.get('is_origin_reasoning', True)
- async for content_type, content in self.stream_chat(
- messages=messages,
- model=model,
- is_origin_reasoning=is_origin_reasoning
- ):
- if content_type in ("reasoning", "content"):
- yield content_type, content```
+ logger.error(f"处理推理内容时发生错误: {e}")
+ continue```
 ______________________________
 
 ## ...\clients\ollama_r1.py
@@ -544,6 +592,13 @@ class OllamaR1Client(BaseClient):
  return False, content
  else:
  return True, content
+ def _extract_reasoning(self, content: str) -> tuple[bool, str]:
+ if "<think>" in content and "</think>" in content:
+ start = content.find("<think>") + 7
+ end = content.find("</think>")
+ if start < end:
+ return True, content[start:end].strip()
+ return False, ""
  async def stream_chat(self, messages: list, model: str = "deepseek-r1:32b") -> AsyncGenerator[tuple[str, str], None]:
  if not messages:
  raise ValueError("消息列表不能为空")
@@ -560,9 +615,6 @@ class OllamaR1Client(BaseClient):
  }
  }
  logger.debug(f"开始流式对话：{data}")
- max_retries = 3
- retry_count = 0
- while retry_count < max_retries:
  try:
  current_content = ""
  async for chunk in self._make_request(headers, data):
@@ -571,59 +623,31 @@ class OllamaR1Client(BaseClient):
  continue
  try:
  response = json.loads(chunk_str)
- if response.get("done"):
- if current_content:
- is_complete, content = self._process_think_tag_content(current_content)
- if is_complete:
- if "<think>" in content and "</think>" in content:
- start_idx = content.find("<think>") + 7
- end_idx = content.find("</think>")
- if start_idx < end_idx:
- yield "reasoning", content[start_idx:end_idx].strip()
- else:
- yield "content", content
- else:
- yield "content", content
- return
  if "message" in response and "content" in response["message"]:
  content = response["message"]["content"]
  current_content += content
- if "<think>" in current_content and "</think>" in current_content:
- while "<think>" in current_content and "</think>" in current_content:
- start_idx = current_content.find("<think>")
- end_idx = current_content.find("</think>")
- if start_idx < end_idx:
- reasoning = current_content[start_idx + 7:end_idx].strip()
- if reasoning:
+ has_reasoning, reasoning = self._extract_reasoning(current_content)
+ if has_reasoning:
  yield "reasoning", reasoning
- current_content = current_content[end_idx + 8:].strip()
- else:
- break
- if current_content and "<think>" not in current_content:
- yield "content", current_content
- current_content = ""
- except json.JSONDecodeError as e:
- logger.error(f"JSON 解析错误: {e}")
+ current_content = current_content[current_content.find("</think>") + 8:]
+ if response.get("done"):
+ has_reasoning, reasoning = self._extract_reasoning(current_content)
+ if has_reasoning:
+ yield "reasoning", reasoning
+ return
+ except json.JSONDecodeError:
  continue
- break
- except asyncio.TimeoutError:
- retry_count += 1
- if retry_count < max_retries:
- delay = 2 ** retry_count
- logger.warning(f"请求超时，第 {retry_count} 次重试，等待 {delay} 秒...")
- await asyncio.sleep(delay)
- continue
- logger.error("达到最大重试次数，放弃请求")
- raise
  except Exception as e:
  logger.error(f"流式对话发生错误: {e}", exc_info=True)
  raise
- async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+ async def get_reasoning(self, messages: list, model: str = None, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+ if model is None:
+ model = self.default_model
  async for content_type, content in self.stream_chat(
  messages=messages,
  model=model
  ):
- if content_type in ("reasoning", "content"):
+ if content_type == "reasoning":
  yield content_type, content
  def _get_proxy_config(self) -> tuple[bool, str | None]:
  proxy = os.getenv("OLLAMA_PROXY")
@@ -658,34 +682,22 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 class DeepClaude:
- def __init__(
- self,
- deepseek_api_key: str,
- claude_api_key: str,
- deepseek_api_url: str = None,
- claude_api_url: str = None,
- claude_provider: str = None,
- is_origin_reasoning: bool = None,
- ollama_api_url: str = None
- ):
- if not deepseek_api_key and os.getenv('REASONING_PROVIDER') == 'deepseek':
- raise ValueError("使用 DeepSeek 推理时必须提供 DEEPSEEK_API_KEY")
- if not claude_api_key:
- raise ValueError("必须提供 CLAUDE_API_KEY")
- if os.getenv('REASONING_PROVIDER') == 'ollama':
- ollama_url = ollama_api_url or os.getenv('OLLAMA_API_URL')
- if not ollama_url:
- raise ValueError("使用 Ollama 推理时必须提供 OLLAMA_API_URL")
- self.reasoning_providers = {
- 'deepseek': lambda: DeepSeekClient(deepseek_api_key, deepseek_api_url),
- 'ollama': lambda: OllamaR1Client(ollama_api_url)
- }
- self.claude_client = ClaudeClient(claude_api_key, claude_api_url, claude_provider)
- self.is_origin_reasoning = (
- is_origin_reasoning
- if is_origin_reasoning is not None
- else os.getenv('IS_ORIGIN_REASONING', 'true').lower() == 'true'
+ def __init__(self, **kwargs):
+ self.claude_client = ClaudeClient(
+ api_key=kwargs.get('claude_api_key'),
+ api_url=kwargs.get('claude_api_url'),
+ provider=kwargs.get('claude_provider')
  )
+ self.reasoning_providers = {
+ 'deepseek': lambda: DeepSeekClient(
+ api_key=kwargs.get('deepseek_api_key'),
+ api_url=kwargs.get('deepseek_api_url'),
+ provider=kwargs.get('deepseek_provider')
+ ),
+ 'ollama': lambda: OllamaR1Client(
+ api_url=kwargs.get('ollama_api_url')
+ )
+ }
  def _get_reasoning_provider(self):
  provider = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
  if provider not in self.reasoning_providers:
@@ -731,110 +743,51 @@ class DeepClaude:
  except Exception as e:
  logger.error(f"处理流式响应时发生错误: {e}", exc_info=True)
  raise
- async def chat_completions_with_stream(
- self,
- messages: list,
- model_arg: tuple[float, float, float, float],
- deepseek_model: str = None,
- claude_model: str = None
- ) -> AsyncGenerator[bytes, None]:
- self._validate_messages(messages)
- deepseek_model = deepseek_model or os.getenv('DEEPSEEK_MODEL', 'deepseek-ai/DeepSeek-R1')
- claude_model = claude_model or os.getenv('CLAUDE_MODEL', 'claude-3-sonnet-20240229')
- self._validate_model_names(deepseek_model, claude_model)
- chat_id = f"chatcmpl-{hex(int(time.time() * 1000))[2:]}"
- created_time = int(time.time())
- response_queue = asyncio.Queue()
+ async def chat_completions_with_stream(self, messages: list, model_arg: tuple = None, **kwargs):
  try:
- provider = self._get_reasoning_provider()
- model = deepseek_model if isinstance(provider, DeepSeekClient) else (
- "deepseek-r1:32b" if isinstance(provider, OllamaR1Client) else claude_model
- )
- kwargs = {
- "messages": messages,
- "model": model,
- }
- if not isinstance(provider, OllamaR1Client):
- kwargs["model_arg"] = model_arg
- if isinstance(provider, DeepSeekClient):
- kwargs["is_origin_reasoning"] = self.is_origin_reasoning
  reasoning_content = []
- yield self._format_stream_response(
- "🤔 思考过程:\n",
- chat_id,
- created_time,
- model
- )
- current_reasoning = ""
+ provider = self._get_reasoning_provider()
+ provider_type = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
+ if provider_type == 'ollama':
+ model = "deepseek-r1:32b"
+ provider_kwargs = {}
+ else:
+ model = os.getenv('DEEPSEEK_MODEL', 'deepseek-reasoner')
+ provider_kwargs = {'model_arg': model_arg} if model_arg else {}
+ yield self._format_stream_response("🤔 思考过程:\n", **kwargs)
  try:
- async for content_type, content in provider.stream_chat(**kwargs):
+ async for content_type, content in provider.get_reasoning(
+ messages=messages,
+ model=model,
+ **provider_kwargs
+ ):
  if content_type == "reasoning":
  reasoning_content.append(content)
- for char in content:
- yield self._format_stream_response(
- char,
- chat_id,
- created_time,
- model
- )
- await asyncio.sleep(0.01)
- yield self._format_stream_response(
- "\n",
- chat_id,
- created_time,
- model
- )
+ yield self._format_stream_response(content, **kwargs)
  except Exception as e:
- logger.error(f"获取推理内容失败: {e}")
- yield self._format_stream_response(
- "\n❌ 思考过程获取失败，请稍后重试\n",
- chat_id,
- created_time,
- model
- )
- return
- yield self._format_stream_response(
- "\n=============== 思考完毕，开始回答 ===============\n\n",
- chat_id,
- created_time,
- model
- )
+ logger.error(f"获取思考过程失败: {e}")
+ reasoning = "\n".join(reasoning_content) if reasoning_content else "无法获取思考过程"
  try:
- reasoning = "\n".join(reasoning_content)
- combined_content = f
- claude_messages = [{"role": "user", "content": combined_content}]
+ prompt = self._format_claude_prompt(messages[-1]['content'], reasoning)
+ claude_messages = [{"role": "user", "content": prompt}]
+ yield self._format_stream_response("\n\n---\n最终答案：\n\n", **kwargs)
  async for content_type, content in self.claude_client.stream_chat(
  messages=claude_messages,
- model_arg=model_arg,
- model=claude_model
+ model=os.getenv('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022'),
+ max_tokens=8192,
+ temperature=0.7,
+ top_p=0.9
  ):
  if content_type == "answer":
- for char in content:
- yield self._format_stream_response(
- char,
- chat_id,
- created_time,
- model
- )
- await asyncio.sleep(0.01)
+ yield self._format_stream_response(content, **kwargs)
  except Exception as e:
- logger.error(f"获取 Claude 回答失败: {e}")
- yield self._format_stream_response(
- "\n❌ 获取回答失败，请稍后重试\n",
- chat_id,
- created_time,
- model
- )
+ logger.error(f"获取Claude回答失败: {e}")
+ yield self._format_stream_response("❌ 获取最终答案失败，请稍后重试", **kwargs)
  except Exception as e:
- logger.error(f"处理流式对话时发生错误: {e}")
- yield self._format_stream_response(
- "\n❌ 服务出现错误，请稍后重试\n",
- chat_id,
- created_time,
- model
- )
- finally:
- yield b'data: [DONE]\n\n'
+ logger.error(f"处理请求时发生错误: {e}")
+ yield self._format_stream_response("❌ 服务出现错误，请稍后重试", **kwargs)
+ def _format_claude_prompt(self, original_question: str, reasoning: str) -> str:
+ return f
  async def chat_completions_without_stream(
  self,
  messages: list,
@@ -846,7 +799,7 @@ class DeepClaude:
  logger.debug(f"输入消息: {messages}")
  logger.info("正在获取推理内容...")
  try:
- reasoning = await self._get_reasoning_with_fallback(
+ reasoning = await self._get_reasoning_content(
  messages=messages,
  model=deepseek_model,
  model_arg=model_arg
@@ -874,18 +827,35 @@ class DeepClaude:
  except Exception as e:
  logger.error(f"获取 Claude 回答失败: {e}")
  raise
- async def _get_reasoning_content(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
- provider = self._get_reasoning_provider()
+ async def _get_reasoning_content(self, messages: list, model: str, **kwargs) -> str:
  try:
+ provider = self._get_reasoning_provider()
+ reasoning_content = []
  async for content_type, content in provider.get_reasoning(
  messages=messages,
  model=model,
- **kwargs
+ model_arg=kwargs.get('model_arg')
  ):
- yield content_type, content
+ if content_type == "reasoning":
+ reasoning_content.append(content)
+ return "\n".join(reasoning_content)
  except Exception as e:
- logger.error(f"获取推理内容时发生错误: {e}", exc_info=True)
- raise
+ logger.error(f"主要推理提供者失败: {e}")
+ if hasattr(self, 'ollama_api_url'):
+ logger.info("尝试切换到 Ollama 推理提供者")
+ try:
+ provider = OllamaR1Client(self.ollama_api_url)
+ reasoning_content = []
+ async for content_type, content in provider.get_reasoning(
+ messages=messages,
+ model="deepseek-r1:32b"
+ ):
+ if content_type == "reasoning":
+ reasoning_content.append(content)
+ return "\n".join(reasoning_content)
+ except Exception as e:
+ logger.error(f"备用推理提供者也失败: {e}")
+ return "无法获取推理内容"
  async def _retry_operation(self, operation, max_retries=3):
  for i in range(max_retries):
  try:
@@ -951,18 +921,21 @@ class DeepClaude:
  elif provider == 'ollama':
  if not self.ollama_api_url:
  raise ValueError("使用 Ollama 时必须提供 API URL")
- def _format_stream_response(self, content: str, chat_id: str, created_time: int, model: str) -> bytes:
+ def _format_stream_response(self, content: str, **kwargs) -> bytes:
+ if not content:
+ return b""
  response = {
- "id": chat_id,
+ "id": kwargs.get('chat_id', 'chatcmpl-default'),
  "object": "chat.completion.chunk",
- "created": created_time,
- "model": model,
+ "created": kwargs.get('created_time', int(time.time())),
+ "model": kwargs.get('model', 'deepclaude'),
  "choices": [{
  "index": 0,
  "delta": {
  "role": "assistant",
  "content": content
- }
+ },
+ "finish_reason": None
  }]
  }
  return f"data: {json.dumps(response)}\n\n".encode('utf-8')```
@@ -1132,7 +1105,7 @@ async def test_claude_stream():
  logger.error("请在 .env 文件中设置 CLAUDE_API_KEY")
  return
  messages = [
- {"role": "user", "content": "1+1等于几?"}
+ {"role": "user", "content": "陵水好玩嘛?"}
  ]
  client = ClaudeClient(api_key, api_url, provider)
  try:
@@ -1183,6 +1156,7 @@ async def test_deepseek_stream():
  api_key = os.getenv("DEEPSEEK_API_KEY")
  api_url = os.getenv("DEEPSEEK_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
  is_origin_reasoning = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
+ logger.info("=== DeepSeek 客户端测试开始 ===")
  logger.info(f"API URL: {api_url}")
  logger.info(f"API Key 是否存在: {bool(api_key)}")
  logger.info(f"原始推理模式: {is_origin_reasoning}")
@@ -1196,20 +1170,93 @@ async def test_deepseek_stream():
  try:
  logger.info("开始测试 DeepSeek 流式输出...")
  logger.debug(f"发送消息: {messages}")
+ reasoning_buffer = []
+ content_buffer = []
  async for content_type, content in client.stream_chat(
  messages=messages,
  model="deepseek-ai/DeepSeek-R1",
  is_origin_reasoning=is_origin_reasoning
  ):
  if content_type == "reasoning":
- logger.info(f"收到推理内容: {content}")
+ reasoning_buffer.append(content)
+ if len(''.join(reasoning_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.debug(f"推理过程：{''.join(reasoning_buffer)}")
+ reasoning_buffer = []
  elif content_type == "content":
- logger.info(f"收到最终答案: {content}")
+ content_buffer.append(content)
+ if len(''.join(content_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ content_buffer = []
+ if reasoning_buffer:
+ logger.debug(f"推理过程：{''.join(reasoning_buffer)}")
+ if content_buffer:
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ logger.info("=== DeepSeek 客户端测试完成 ===")
  except Exception as e:
  logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
  logger.error(f"错误类型: {type(e)}")
 def main():
  asyncio.run(test_deepseek_stream())
+if __name__ == "__main__":
+ main()```
+______________________________
+
+## ...\test\test_nvidia_deepseek.py
+```python
+import os
+import sys
+import asyncio
+from dotenv import load_dotenv
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+from app.clients.deepseek_client import DeepSeekClient
+from app.utils.logger import logger
+load_dotenv()
+async def test_nvidia_deepseek_stream():
+ api_key = os.getenv("DEEPSEEK_API_KEY")
+ api_url = os.getenv("DEEPSEEK_API_URL")
+ logger.info("=== NVIDIA DeepSeek 客户端测试开始 ===")
+ logger.info(f"API URL: {api_url}")
+ logger.info(f"API Key 是否存在: {bool(api_key)}")
+ if not api_key:
+ logger.error("请在 .env 文件中设置 DEEPSEEK_API_KEY")
+ return
+ messages = [
+ {"role": "user", "content": "Which number is larger, 9.11 or 9.8?"}
+ ]
+ client = DeepSeekClient(
+ api_key=api_key,
+ api_url=api_url,
+ provider="nvidia"
+ )
+ try:
+ logger.info("开始测试 NVIDIA DeepSeek 流式输出...")
+ logger.debug(f"发送消息: {messages}")
+ reasoning_buffer = []
+ content_buffer = []
+ async for content_type, content in client.stream_chat(
+ messages=messages,
+ model="deepseek-ai/deepseek-r1"
+ ):
+ if content_type == "reasoning":
+ reasoning_buffer.append(content)
+ if len(''.join(reasoning_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.debug(f"推理过程：{''.join(reasoning_buffer)}")
+ reasoning_buffer = []
+ elif content_type == "content":
+ content_buffer.append(content)
+ if len(''.join(content_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ content_buffer = []
+ if reasoning_buffer:
+ logger.debug(f"推理过程：{''.join(reasoning_buffer)}")
+ if content_buffer:
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ logger.info("=== NVIDIA DeepSeek 客户端测试完成 ===")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+def main():
+ asyncio.run(test_nvidia_deepseek_stream())
 if __name__ == "__main__":
  main()```
 ______________________________

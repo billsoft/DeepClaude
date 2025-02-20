@@ -18,21 +18,18 @@ class OllamaR1Client(BaseClient):
         """
         初始化 Ollama R1 客户端
         
-        配置与本地Ollama服务通信所需的基本参数，包括服务器地址。
-        默认使用本地Ollama服务地址。
+        专注于本地运行的 DeepSeek R1 模型
+        只支持 think 标签格式
         
         Args:
             api_url: Ollama服务地址，默认为本地地址
         """
-        # 添加参数验证
         if not api_url:
             raise ValueError("必须提供 Ollama API URL")
             
-        # 确保API URL以/api/chat结尾
         if not api_url.endswith("/api/chat"):
             api_url = f"{api_url.rstrip('/')}/api/chat"
             
-        # Ollama本地服务不需要API密钥
         super().__init__(api_key="", api_url=api_url)
         self.default_model = "deepseek-r1:32b"
     
@@ -63,6 +60,15 @@ class OllamaR1Client(BaseClient):
         else:
             return True, content
             
+    def _extract_reasoning(self, content: str) -> tuple[bool, str]:
+        """从 think 标签提取思考内容"""
+        if "<think>" in content and "</think>" in content:
+            start = content.find("<think>") + 7
+            end = content.find("</think>")
+            if start < end:
+                return True, content[start:end].strip()
+        return False, ""
+
     async def stream_chat(self, messages: list, model: str = "deepseek-r1:32b") -> AsyncGenerator[tuple[str, str], None]:
         # 添加参数验证
         if not messages:
@@ -85,99 +91,60 @@ class OllamaR1Client(BaseClient):
         
         logger.debug(f"开始流式对话：{data}")
         
-        max_retries = 3
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                current_content = ""
-                async for chunk in self._make_request(headers, data):
-                    chunk_str = chunk.decode('utf-8')
-                    if not chunk_str.strip():
-                        continue
-                    
-                    try:
-                        response = json.loads(chunk_str)
-                        if response.get("done"):
-                            # 最后一个chunk，确保处理完所有内容
-                            if current_content:
-                                is_complete, content = self._process_think_tag_content(current_content)
-                                if is_complete:
-                                    # 修复：确保有think标签时才提取推理内容
-                                    if "<think>" in content and "</think>" in content:
-                                        start_idx = content.find("<think>") + 7
-                                        end_idx = content.find("</think>")
-                                        if start_idx < end_idx:  # 确保标签位置正确
-                                            yield "reasoning", content[start_idx:end_idx].strip()
-                                    else:
-                                        yield "content", content
-                                else:
-                                    yield "content", content
-                            return
-                        
-                        if "message" in response and "content" in response["message"]:
-                            content = response["message"]["content"]
-                            current_content += content
-                            
-                            # 修复：改进think标签处理逻辑
-                            if "<think>" in current_content and "</think>" in current_content:
-                                # 找到所有完整的think标签对
-                                while "<think>" in current_content and "</think>" in current_content:
-                                    start_idx = current_content.find("<think>")
-                                    end_idx = current_content.find("</think>")
-                                    
-                                    if start_idx < end_idx:
-                                        # 提取并输出推理内容
-                                        reasoning = current_content[start_idx + 7:end_idx].strip()
-                                        if reasoning:
-                                            yield "reasoning", reasoning
-                                        
-                                        # 更新current_content，移除已处理的部分
-                                        current_content = current_content[end_idx + 8:].strip()
-                                    else:
-                                        break
-                            
-                            # 如果剩余内容中没有think标签，作为普通内容输出
-                            if current_content and "<think>" not in current_content:
-                                yield "content", current_content
-                                current_content = ""
-                                
-                    except json.JSONDecodeError as e:
-                        logger.error(f"JSON 解析错误: {e}")
-                        continue
-                    
-                break  # 成功则跳出循环
-                
-            except asyncio.TimeoutError:
-                retry_count += 1
-                if retry_count < max_retries:
-                    delay = 2 ** retry_count  # 指数退避
-                    logger.warning(f"请求超时，第 {retry_count} 次重试，等待 {delay} 秒...")
-                    await asyncio.sleep(delay)
+        try:
+            current_content = ""
+            async for chunk in self._make_request(headers, data):
+                chunk_str = chunk.decode('utf-8')
+                if not chunk_str.strip():
                     continue
-                logger.error("达到最大重试次数，放弃请求")
-                raise
-            except Exception as e:
-                logger.error(f"流式对话发生错误: {e}", exc_info=True)
-                raise
-    async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
-        """获取推理过程
+                    
+                try:
+                    response = json.loads(chunk_str)
+                    if "message" in response and "content" in response["message"]:
+                        content = response["message"]["content"]
+                        current_content += content
+                        
+                        # 使用 _extract_reasoning 提取推理内容
+                        has_reasoning, reasoning = self._extract_reasoning(current_content)
+                        if has_reasoning:
+                            yield "reasoning", reasoning
+                            # 清理已处理的内容
+                            current_content = current_content[current_content.find("</think>") + 8:]
+                            
+                    if response.get("done"):
+                        # 最后检查一次
+                        has_reasoning, reasoning = self._extract_reasoning(current_content)
+                        if has_reasoning:
+                            yield "reasoning", reasoning
+                        return
+                        
+                except json.JSONDecodeError:
+                    continue
+                
+        except Exception as e:
+            logger.error(f"流式对话发生错误: {e}", exc_info=True)
+            raise
+    async def get_reasoning(self, messages: list, model: str = None, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+        """获取思考过程
         
         Args:
             messages: 对话消息列表
-            model: 使用的模型名称
+            model: 使用的模型名称，默认使用 default_model
             **kwargs: 额外参数
             
         Yields:
             tuple[str, str]: (content_type, content)
-                - content_type: "reasoning" 表示推理过程，"content" 表示最终答案
+                - content_type: "reasoning" 表示思考过程
                 - content: 具体内容
         """
+        if model is None:
+            model = self.default_model
+            
         async for content_type, content in self.stream_chat(
             messages=messages,
             model=model
         ):
-            if content_type in ("reasoning", "content"):
+            if content_type == "reasoning":
                 yield content_type, content
     def _get_proxy_config(self) -> tuple[bool, str | None]:
         """获取代理配置"""

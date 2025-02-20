@@ -39,7 +39,7 @@ async def test_claude_stream():
         return
         
     messages = [
-        {"role": "user", "content": "1+1等于几?"}
+        {"role": "user", "content": "陵水好玩嘛?"}
     ]
     
     client = ClaudeClient(api_key, api_url, provider)
