@@ -44,7 +44,6 @@ class ClaudeClient(BaseClient):
             http_proxy = os.getenv('HTTP_PROXY')
             https_proxy = os.getenv('HTTPS_PROXY')
             
-            # 添加代理日志
             if https_proxy or http_proxy:
                 logger.info(f"Claude 客户端使用代理: {https_proxy or http_proxy}")
             else:

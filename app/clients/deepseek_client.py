@@ -14,20 +14,28 @@ from .base_client import BaseClient  # 导入基础客户端类
 import os
 
 class DeepSeekClient(BaseClient):
-    def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
-        """初始化 DeepSeek 客户端
+    def __init__(self, api_key: str, api_url: str = None, provider: str = None):
+        """初始化 DeepSeek 客户端"""
+        # 从环境变量获取 provider
+        self.provider = provider or os.getenv('DEEPSEEK_PROVIDER', 'deepseek')
         
-        配置与DeepSeek API通信所需的基本参数，包括API密钥和服务器地址。
-        默认使用DeepSeek官方API地址。
+        # 根据 provider 设置默认 URL 和模型
+        default_urls = {
+            'deepseek': 'https://api.deepseek.com/v1/chat/completions',
+            'siliconflow': 'https://api.siliconflow.cn/v1/chat/completions',
+            'nvidia': 'https://integrate.api.nvidia.com/v1/chat/completions'
+        }
         
-        Args:
-            api_key: DeepSeek API密钥，用于API认证
-            api_url: DeepSeek API地址，默认使用官方API地址
-            provider: API提供商，默认为"deepseek"
-        """
+        default_models = {
+            'deepseek': 'deepseek-reasoner',
+            'siliconflow': 'deepseek-ai/DeepSeek-R1',
+            'nvidia': 'deepseek-ai/deepseek-r1'
+        }
+        
+        api_url = api_url or os.getenv('DEEPSEEK_API_URL') or default_urls.get(self.provider)
         super().__init__(api_key, api_url)
-        self.provider = provider
-        self.default_model = "deepseek-ai/DeepSeek-R1"  # 添加默认模型
+        
+        self.default_model = default_models.get(self.provider)
         
     def _get_proxy_config(self) -> tuple[bool, str | None]:
         """获取 DeepSeek 客户端的代理配置
@@ -73,21 +81,36 @@ class DeepSeekClient(BaseClient):
         else:
             return True, content
             
-    async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
+    async def stream_chat(self, messages: list, model: str = None, is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
+        """流式对话"""
+        if not model:
+            model = self.default_model
+            
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         }
+        
         data = {
             "model": model,
             "messages": messages,
             "stream": True,
         }
         
+        # NVIDIA 特定参数
+        if self.provider == 'nvidia':
+            data.update({
+                "temperature": 0.6,
+                "top_p": 0.7,
+                "max_tokens": 4096
+            })
+            
         logger.debug(f"开始流式对话：{data}")
         
         try:
+            reasoning_buffer = []
+            content_buffer = []
             async for chunk in self._make_request(headers, data):
                 chunk_str = chunk.decode('utf-8')
                 if not chunk_str.strip():
@@ -97,7 +120,12 @@ class DeepSeekClient(BaseClient):
                     if line.startswith("data: "):
                         json_str = line[len("data: "):]
                         if json_str == "[DONE]":
-                            return
+                            # 输出剩余的缓冲内容
+                            if reasoning_buffer:
+                                logger.debug(f"推理内容：{''.join(reasoning_buffer)}")
+                            if content_buffer:
+                                logger.info(f"最终答案：{''.join(content_buffer)}")
+                                return
                         
                         try:
                             data = json.loads(json_str)
@@ -106,17 +134,27 @@ class DeepSeekClient(BaseClient):
                             
                             delta = data["choices"][0]["delta"]
                             if is_origin_reasoning:
-                                # 处理原始推理内容
                                 if delta.get("reasoning_content"):
                                     content = delta["reasoning_content"]
-                                    logger.debug(f"提取推理内容：{content}")
+                                    reasoning_buffer.append(content)
+                                    # 当收集到一定数量的字符或遇到标点符号时输出
+                                    if len(''.join(reasoning_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+                                        reasoning_buffer = []
                                     yield "reasoning", content
                                 elif delta.get("content"):
+                                    # 输出剩余的推理内容
+                                    if reasoning_buffer:
+                                        logger.debug(f"推理内容：{''.join(reasoning_buffer)}")
+                                        reasoning_buffer = []
+                                    # 收集最终答案
                                     content = delta["content"]
-                                    logger.info(f"提取内容信息，推理阶段结束: {content}")
+                                    content_buffer.append(content)
+                                    # 当收集到一定数量或遇到标点符号时输出
+                                    if len(''.join(content_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+                                        logger.info(f"最终答案：{''.join(content_buffer)}")
+                                        content_buffer = []
                                     yield "content", content
                             else:
-                                # 处理普通对话内容
                                 if delta.get("content"):
                                     content = delta["content"]
                                     yield "content", content

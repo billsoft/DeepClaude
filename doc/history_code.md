@@ -760,17 +760,26 @@ class DeepClaude:
  kwargs["is_origin_reasoning"] = self.is_origin_reasoning
  reasoning_content = []
  yield self._format_stream_response(
- "\n🤔 开始思考...\n\n",
+ "🤔 思考过程:\n",
  chat_id,
  created_time,
  model
  )
+ current_reasoning = ""
  try:
  async for content_type, content in provider.stream_chat(**kwargs):
  if content_type == "reasoning":
  reasoning_content.append(content)
+ for char in content:
  yield self._format_stream_response(
- content + "\n",
+ char,
+ chat_id,
+ created_time,
+ model
+ )
+ await asyncio.sleep(0.01)
+ yield self._format_stream_response(
+ "\n",
  chat_id,
  created_time,
  model
@@ -779,14 +788,6 @@ class DeepClaude:
  logger.error(f"获取推理内容失败: {e}")
  yield self._format_stream_response(
  "\n❌ 思考过程获取失败，请稍后重试\n",
- chat_id,
- created_time,
- model
- )
- return
- if not reasoning_content:
- yield self._format_stream_response(
- "\n❌ 未能获取有效的思考内容，请稍后重试\n",
  chat_id,
  created_time,
  model
@@ -808,12 +809,14 @@ class DeepClaude:
  model=claude_model
  ):
  if content_type == "answer":
+ for char in content:
  yield self._format_stream_response(
- content,
+ char,
  chat_id,
  created_time,
  model
  )
+ await asyncio.sleep(0.01)
  except Exception as e:
  logger.error(f"获取 Claude 回答失败: {e}")
  yield self._format_stream_response(

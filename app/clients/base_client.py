@@ -56,33 +56,34 @@ class BaseClient(ABC):
     
     async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
         try:
-            # 获取代理配置
+            # 获取代理配置 - 由子类实现具体逻辑
             use_proxy, proxy = self._get_proxy_config()
             
-            # 创建 TCP 连接器，设置更长的超时时间
+            # 创建 TCP 连接器
             connector = aiohttp.TCPConnector(
                 ssl=False,
                 force_close=True,
-                enable_cleanup_closed=True  # 添加自动清理
+                enable_cleanup_closed=True
             )
             
-            # 设置更合理的超时时间
+            # 设置超时时间
             timeout = aiohttp.ClientTimeout(
-                total=120,  # 总超时时间
-                connect=30,  # 连接超时
-                sock_read=60  # 读取超时
+                total=120,
+                connect=30,
+                sock_read=60
             )
             
             async with aiohttp.ClientSession(connector=connector) as session:
                 logger.debug(f"正在发送请求到: {self.api_url}")
-                logger.debug(f"使用代理: {proxy if use_proxy else '不使用代理'}")
+                if use_proxy:
+                    logger.debug(f"使用代理: {proxy}")
                 
                 async with session.post(
                     self.api_url,
                     headers=headers,
                     json=data,
                     proxy=proxy if use_proxy else None,
-                    timeout=timeout  # 使用新的超时设置
+                    timeout=timeout
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()

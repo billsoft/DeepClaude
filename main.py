@@ -9,7 +9,7 @@ load_dotenv()
 def main():
     """主函数，启动FastAPI应用"""
     # 从环境变量获取配置，如果没有则使用默认值
-    host = os.getenv('HOST', '0.0.0.0')
+    host = os.getenv('HOST', '::')
     port = int(os.getenv('PORT', 1124))
     reload = os.getenv('RELOAD', 'false').lower() == 'true'
 

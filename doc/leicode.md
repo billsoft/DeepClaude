@@ -3,29 +3,30 @@
 .
 ├── Dockerfile
 ├── main.py
-├── .github/
-│   ├── workflows/
 ├── app/
 │   ├── main.py
 │   ├── clients/
 │   │   ├── base_client.py
-│   │   ├── claude_client.py
-│   │   ├── deepseek_client.py
+│   │   ├── __init__.py
 │   │   ├── ollama_r1.py
-│   │   ├── __init__.py
-│   ├── deepclaude/
-│   │   ├── deepclaude.py
-│   │   ├── __init__.py
+│   │   ├── deepseek_client.py
+│   │   ├── claude_client.py
 │   ├── utils/
 │   │   ├── auth.py
 │   │   ├── logger.py
 │   │   ├── message_processor.py
-├── doc/
+│   ├── deepclaude/
+│   │   ├── __init__.py
+│   │   ├── deepclaude.py
 ├── test/
-│   ├── test_claude_client.py
-│   ├── test_deepclaude.py
 │   ├── test_deepseek_client.py
+│   ├── test_deepclaude.py
+│   ├── test_nvidia_deepseek.py
 │   ├── test_ollama_r1.py
+│   ├── test_claude_client.py
+├── .github/
+│   ├── workflows/
+├── doc/
 ```
 
 # Web服务器层
@@ -52,7 +53,7 @@ if __name__ == '__main__':
  main()```
 ______________________________
 
-## .\main.py
+## ./main.py
 ```python
 import os
 import uvicorn
@@ -74,7 +75,7 @@ if __name__ == '__main__':
  main()```
 ______________________________
 
-## ...\app\main.py
+## .../app/main.py
 ```python
 import os
 import sys
@@ -234,7 +235,7 @@ def get_and_validate_params(body: dict) -> tuple:
  return (temperature, top_p, presence_penalty, frequency_penalty, stream)```
 ______________________________
 
-## ...\clients\base_client.py
+## .../clients/base_client.py
 ```python
 from typing import AsyncGenerator, Any, Tuple
 import aiohttp
@@ -272,7 +273,8 @@ class BaseClient(ABC):
  )
  async with aiohttp.ClientSession(connector=connector) as session:
  logger.debug(f"正在发送请求到: {self.api_url}")
- logger.debug(f"使用代理: {proxy if use_proxy else '不使用代理'}")
+ if use_proxy:
+ logger.debug(f"使用代理: {proxy}")
  async with session.post(
  self.api_url,
  headers=headers,
@@ -296,7 +298,255 @@ class BaseClient(ABC):
  raise```
 ______________________________
 
-## ...\clients\claude_client.py
+## .../clients/__init__.py
+```python
+from .base_client import BaseClient
+from .deepseek_client import DeepSeekClient
+from .claude_client import ClaudeClient
+from .ollama_r1 import OllamaR1Client
+__all__ = ['BaseClient', 'DeepSeekClient', 'ClaudeClient', 'OllamaR1Client']```
+______________________________
+
+## .../clients/ollama_r1.py
+```python
+import os
+import json
+from typing import AsyncGenerator
+from app.utils.logger import logger
+from .base_client import BaseClient
+import asyncio
+class OllamaR1Client(BaseClient):
+ def __init__(self, api_url: str = "http://localhost:11434"):
+ if not api_url:
+ raise ValueError("必须提供 Ollama API URL")
+ if not api_url.endswith("/api/chat"):
+ api_url = f"{api_url.rstrip('/')}/api/chat"
+ super().__init__(api_key="", api_url=api_url)
+ self.default_model = "deepseek-r1:32b"
+ def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
+ has_start = "<think>" in content
+ has_end = "</think>" in content
+ if has_start and has_end:
+ return True, content
+ elif has_start:
+ return False, content
+ elif not has_start and not has_end:
+ return False, content
+ else:
+ return True, content
+ async def stream_chat(self, messages: list, model: str = "deepseek-r1:32b") -> AsyncGenerator[tuple[str, str], None]:
+ if not messages:
+ raise ValueError("消息列表不能为空")
+ headers = {
+ "Content-Type": "application/json",
+ }
+ data = {
+ "model": model,
+ "messages": messages,
+ "stream": True,
+ "options": {
+ "temperature": 0.7,
+ "num_predict": 1024,
+ }
+ }
+ logger.debug(f"开始流式对话：{data}")
+ max_retries = 3
+ retry_count = 0
+ while retry_count < max_retries:
+ try:
+ current_content = ""
+ async for chunk in self._make_request(headers, data):
+ chunk_str = chunk.decode('utf-8')
+ if not chunk_str.strip():
+ continue
+ try:
+ response = json.loads(chunk_str)
+ if response.get("done"):
+ if current_content:
+ is_complete, content = self._process_think_tag_content(current_content)
+ if is_complete:
+ if "<think>" in content and "</think>" in content:
+ start_idx = content.find("<think>") + 7
+ end_idx = content.find("</think>")
+ if start_idx < end_idx:
+ yield "reasoning", content[start_idx:end_idx].strip()
+ else:
+ yield "content", content
+ else:
+ yield "content", content
+ return
+ if "message" in response and "content" in response["message"]:
+ content = response["message"]["content"]
+ current_content += content
+ if "<think>" in current_content and "</think>" in current_content:
+ while "<think>" in current_content and "</think>" in current_content:
+ start_idx = current_content.find("<think>")
+ end_idx = current_content.find("</think>")
+ if start_idx < end_idx:
+ reasoning = current_content[start_idx + 7:end_idx].strip()
+ if reasoning:
+ yield "reasoning", reasoning
+ current_content = current_content[end_idx + 8:].strip()
+ else:
+ break
+ if current_content and "<think>" not in current_content:
+ yield "content", current_content
+ current_content = ""
+ except json.JSONDecodeError as e:
+ logger.error(f"JSON 解析错误: {e}")
+ continue
+ break
+ except asyncio.TimeoutError:
+ retry_count += 1
+ if retry_count < max_retries:
+ delay = 2 ** retry_count
+ logger.warning(f"请求超时，第 {retry_count} 次重试，等待 {delay} 秒...")
+ await asyncio.sleep(delay)
+ continue
+ logger.error("达到最大重试次数，放弃请求")
+ raise
+ except Exception as e:
+ logger.error(f"流式对话发生错误: {e}", exc_info=True)
+ raise
+ async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+ async for content_type, content in self.stream_chat(
+ messages=messages,
+ model=model
+ ):
+ if content_type in ("reasoning", "content"):
+ yield content_type, content
+ def _get_proxy_config(self) -> tuple[bool, str | None]:
+ proxy = os.getenv("OLLAMA_PROXY")
+ if proxy:
+ logger.info(f"Ollama 客户端使用代理: {proxy}")
+ else:
+ logger.debug("Ollama 客户端未启用代理")
+ return bool(proxy), proxy```
+______________________________
+
+## .../clients/deepseek_client.py
+```python
+import json
+from typing import AsyncGenerator
+from app.utils.logger import logger
+from .base_client import BaseClient
+import os
+class DeepSeekClient(BaseClient):
+ def __init__(self, api_key: str, api_url: str = None, provider: str = None):
+ self.provider = provider or os.getenv('DEEPSEEK_PROVIDER', 'deepseek')
+ default_urls = {
+ 'deepseek': 'https://api.deepseek.com/v1/chat/completions',
+ 'siliconflow': 'https://api.siliconflow.cn/v1/chat/completions',
+ 'nvidia': 'https://integrate.api.nvidia.com/v1/chat/completions'
+ }
+ default_models = {
+ 'deepseek': 'deepseek-reasoner',
+ 'siliconflow': 'deepseek-ai/DeepSeek-R1',
+ 'nvidia': 'deepseek-ai/deepseek-r1'
+ }
+ api_url = api_url or os.getenv('DEEPSEEK_API_URL') or default_urls.get(self.provider)
+ super().__init__(api_key, api_url)
+ self.default_model = default_models.get(self.provider)
+ def _get_proxy_config(self) -> tuple[bool, str | None]:
+ enable_proxy = os.getenv('DEEPSEEK_ENABLE_PROXY', 'false').lower() == 'true'
+ if enable_proxy:
+ http_proxy = os.getenv('HTTP_PROXY')
+ https_proxy = os.getenv('HTTPS_PROXY')
+ logger.info(f"DeepSeek 客户端使用代理: {https_proxy or http_proxy}")
+ return True, https_proxy or http_proxy
+ logger.debug("DeepSeek 客户端未启用代理")
+ return False, None
+ def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
+ has_start = "<think>" in content
+ has_end = "</think>" in content
+ if has_start and has_end:
+ return True, content
+ elif has_start:
+ return False, content
+ elif not has_start and not has_end:
+ return False, content
+ else:
+ return True, content
+ async def stream_chat(self, messages: list, model: str = None, is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
+ if not model:
+ model = self.default_model
+ headers = {
+ "Authorization": f"Bearer {self.api_key}",
+ "Content-Type": "application/json",
+ "Accept": "text/event-stream",
+ }
+ data = {
+ "model": model,
+ "messages": messages,
+ "stream": True,
+ }
+ if self.provider == 'nvidia':
+ data.update({
+ "temperature": 0.6,
+ "top_p": 0.7,
+ "max_tokens": 4096
+ })
+ logger.debug(f"开始流式对话：{data}")
+ try:
+ reasoning_buffer = []
+ content_buffer = []
+ async for chunk in self._make_request(headers, data):
+ chunk_str = chunk.decode('utf-8')
+ if not chunk_str.strip():
+ continue
+ for line in chunk_str.splitlines():
+ if line.startswith("data: "):
+ json_str = line[len("data: "):]
+ if json_str == "[DONE]":
+ if reasoning_buffer:
+ logger.debug(f"推理内容：{''.join(reasoning_buffer)}")
+ if content_buffer:
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ return
+ try:
+ data = json.loads(json_str)
+ if not data or not data.get("choices") or not data["choices"][0].get("delta"):
+ continue
+ delta = data["choices"][0]["delta"]
+ if is_origin_reasoning:
+ if delta.get("reasoning_content"):
+ content = delta["reasoning_content"]
+ reasoning_buffer.append(content)
+ if len(''.join(reasoning_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ reasoning_buffer = []
+ yield "reasoning", content
+ elif delta.get("content"):
+ if reasoning_buffer:
+ logger.debug(f"推理内容：{''.join(reasoning_buffer)}")
+ reasoning_buffer = []
+ content = delta["content"]
+ content_buffer.append(content)
+ if len(''.join(content_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ content_buffer = []
+ yield "content", content
+ else:
+ if delta.get("content"):
+ content = delta["content"]
+ yield "content", content
+ except json.JSONDecodeError as e:
+ logger.error(f"JSON 解析错误: {e}")
+ continue
+ except Exception as e:
+ logger.error(f"流式对话发生错误: {e}", exc_info=True)
+ raise
+ async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+ is_origin_reasoning = kwargs.get('is_origin_reasoning', True)
+ async for content_type, content in self.stream_chat(
+ messages=messages,
+ model=model,
+ is_origin_reasoning=is_origin_reasoning
+ ):
+ if content_type in ("reasoning", "content"):
+ yield content_type, content```
+______________________________
+
+## .../clients/claude_client.py
 ```python
 import json
 from typing import AsyncGenerator
@@ -428,222 +678,143 @@ class ClaudeClient(BaseClient):
  yield "content", content```
 ______________________________
 
-## ...\clients\deepseek_client.py
+## .../utils/auth.py
 ```python
-import json
-from typing import AsyncGenerator
-from app.utils.logger import logger
-from .base_client import BaseClient
+from fastapi import HTTPException, Header
+from typing import Optional
 import os
-class DeepSeekClient(BaseClient):
- def __init__(self, api_key: str, api_url: str = "https://api.siliconflow.cn/v1/chat/completions", provider: str = "deepseek"):
- super().__init__(api_key, api_url)
- self.provider = provider
- self.default_model = "deepseek-ai/DeepSeek-R1"
- def _get_proxy_config(self) -> tuple[bool, str | None]:
- enable_proxy = os.getenv('DEEPSEEK_ENABLE_PROXY', 'false').lower() == 'true'
- if enable_proxy:
- http_proxy = os.getenv('HTTP_PROXY')
- https_proxy = os.getenv('HTTPS_PROXY')
- logger.info(f"DeepSeek 客户端使用代理: {https_proxy or http_proxy}")
- return True, https_proxy or http_proxy
- logger.debug("DeepSeek 客户端未启用代理")
- return False, None
- def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
- has_start = "<think>" in content
- has_end = "</think>" in content
- if has_start and has_end:
- return True, content
- elif has_start:
- return False, content
- elif not has_start and not has_end:
- return False, content
- else:
- return True, content
- async def stream_chat(self, messages: list, model: str = "deepseek-ai/DeepSeek-R1", is_origin_reasoning: bool = True) -> AsyncGenerator[tuple[str, str], None]:
- headers = {
- "Authorization": f"Bearer {self.api_key}",
- "Content-Type": "application/json",
- "Accept": "text/event-stream",
- }
- data = {
- "model": model,
- "messages": messages,
- "stream": True,
- }
- logger.debug(f"开始流式对话：{data}")
- try:
- async for chunk in self._make_request(headers, data):
- chunk_str = chunk.decode('utf-8')
- if not chunk_str.strip():
- continue
- for line in chunk_str.splitlines():
- if line.startswith("data: "):
- json_str = line[len("data: "):]
- if json_str == "[DONE]":
- return
- try:
- data = json.loads(json_str)
- if not data or not data.get("choices") or not data["choices"][0].get("delta"):
- continue
- delta = data["choices"][0]["delta"]
- if is_origin_reasoning:
- if delta.get("reasoning_content"):
- content = delta["reasoning_content"]
- logger.debug(f"提取推理内容：{content}")
- yield "reasoning", content
- elif delta.get("content"):
- content = delta["content"]
- logger.info(f"提取内容信息，推理阶段结束: {content}")
- yield "content", content
- else:
- if delta.get("content"):
- content = delta["content"]
- yield "content", content
- except json.JSONDecodeError as e:
- logger.error(f"JSON 解析错误: {e}")
- continue
- except Exception as e:
- logger.error(f"流式对话发生错误: {e}", exc_info=True)
- raise
- async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
- is_origin_reasoning = kwargs.get('is_origin_reasoning', True)
- async for content_type, content in self.stream_chat(
- messages=messages,
- model=model,
- is_origin_reasoning=is_origin_reasoning
- ):
- if content_type in ("reasoning", "content"):
- yield content_type, content```
+from dotenv import load_dotenv
+from app.utils.logger import logger
+logger.info(f"当前工作目录: {os.getcwd()}")
+logger.info("尝试加载.env文件...")
+load_dotenv(override=True)
+ALLOW_API_KEY = os.getenv("ALLOW_API_KEY")
+logger.info(f"ALLOW_API_KEY环境变量状态: {'已设置' if ALLOW_API_KEY else '未设置'}")
+if not ALLOW_API_KEY:
+ raise ValueError("ALLOW_API_KEY environment variable is not set")
+logger.info(f"Loaded API key starting with: {ALLOW_API_KEY[:4] if len(ALLOW_API_KEY) >= 4 else ALLOW_API_KEY}")
+async def verify_api_key(authorization: Optional[str] = Header(None)) -> None:
+ if authorization is None:
+ logger.warning("请求缺少Authorization header")
+ raise HTTPException(
+ status_code=401,
+ detail="Missing Authorization header"
+ )
+ api_key = authorization.replace("Bearer ", "").strip()
+ if api_key != ALLOW_API_KEY:
+ logger.warning(f"无效的API密钥: {api_key}")
+ raise HTTPException(
+ status_code=401,
+ detail="Invalid API key"
+ )
+ logger.info("API密钥验证通过")```
 ______________________________
 
-## ...\clients\ollama_r1.py
+## .../utils/logger.py
 ```python
+import logging
+import colorlog
+import sys
 import os
-import json
-from typing import AsyncGenerator
+from dotenv import load_dotenv
+load_dotenv()
+def get_log_level() -> int:
+ level_map = {
+ 'DEBUG': logging.DEBUG,
+ 'INFO': logging.INFO,
+ 'WARNING': logging.WARNING,
+ 'ERROR': logging.ERROR,
+ 'CRITICAL': logging.CRITICAL
+ }
+ level = os.getenv('LOG_LEVEL', 'INFO').upper()
+ return level_map.get(level, logging.INFO)
+def setup_logger(name: str = "DeepClaude") -> logging.Logger:
+ logger = colorlog.getLogger(name)
+ if logger.handlers:
+ return logger
+ log_level = get_log_level()
+ logger.setLevel(log_level)
+ console_handler = logging.StreamHandler(sys.stdout)
+ console_handler.setLevel(log_level)
+ formatter = colorlog.ColoredFormatter(
+ "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+ datefmt="%Y-%m-%d %H:%M:%S",
+ log_colors={
+ 'DEBUG': 'cyan',
+ 'INFO': 'green',
+ 'WARNING': 'yellow',
+ 'ERROR': 'red',
+ 'CRITICAL': 'red,bg_white',
+ }
+ )
+ console_handler.setFormatter(formatter)
+ logger.addHandler(console_handler)
+ return logger
+logger = setup_logger()```
+______________________________
+
+## .../utils/message_processor.py
+```python
+from typing import List, Dict
 from app.utils.logger import logger
-from .base_client import BaseClient
-import asyncio
-class OllamaR1Client(BaseClient):
- def __init__(self, api_url: str = "http://localhost:11434"):
- if not api_url:
- raise ValueError("必须提供 Ollama API URL")
- if not api_url.endswith("/api/chat"):
- api_url = f"{api_url.rstrip('/')}/api/chat"
- super().__init__(api_key="", api_url=api_url)
- self.default_model = "deepseek-r1:32b"
- def _process_think_tag_content(self, content: str) -> tuple[bool, str]:
- has_start = "<think>" in content
- has_end = "</think>" in content
- if has_start and has_end:
- return True, content
- elif has_start:
- return False, content
- elif not has_start and not has_end:
- return False, content
+class MessageProcessor:
+ @staticmethod
+ def convert_to_deepseek_format(messages: List[Dict]) -> List[Dict]:
+ processed = []
+ temp_content = []
+ current_role = None
+ for msg in messages:
+ role = msg.get("role", "")
+ content = msg.get("content", "")
+ if not content:
+ continue
+ if role == "system":
+ if processed and processed[0]["role"] == "system":
+ processed[0]["content"] += f"\n{content}"
  else:
- return True, content
- async def stream_chat(self, messages: list, model: str = "deepseek-r1:32b") -> AsyncGenerator[tuple[str, str], None]:
+ processed.insert(0, {"role": "system", "content": content})
+ continue
+ if role == current_role:
+ temp_content.append(content)
+ else:
+ if temp_content:
+ processed.append({
+ "role": current_role,
+ "content": "\n".join(temp_content)
+ })
+ temp_content = [content]
+ current_role = role
+ if temp_content:
+ processed.append({
+ "role": current_role,
+ "content": "\n".join(temp_content)
+ })
+ final_messages = []
+ for i, msg in enumerate(processed):
+ if i > 0 and msg["role"] == final_messages[-1]["role"]:
+ if msg["role"] == "user":
+ final_messages.append({"role": "assistant", "content": "请继续。"})
+ else:
+ final_messages.append({"role": "user", "content": "请继续。"})
+ final_messages.append(msg)
+ logger.debug(f"转换后的消息格式: {final_messages}")
+ return final_messages
+ @staticmethod
+ def validate_messages(messages: List[Dict]) -> bool:
  if not messages:
- raise ValueError("消息列表不能为空")
- headers = {
- "Content-Type": "application/json",
- }
- data = {
- "model": model,
- "messages": messages,
- "stream": True,
- "options": {
- "temperature": 0.7,
- "num_predict": 1024,
- }
- }
- logger.debug(f"开始流式对话：{data}")
- max_retries = 3
- retry_count = 0
- while retry_count < max_retries:
- try:
- current_content = ""
- async for chunk in self._make_request(headers, data):
- chunk_str = chunk.decode('utf-8')
- if not chunk_str.strip():
- continue
- try:
- response = json.loads(chunk_str)
- if response.get("done"):
- if current_content:
- is_complete, content = self._process_think_tag_content(current_content)
- if is_complete:
- if "<think>" in content and "</think>" in content:
- start_idx = content.find("<think>") + 7
- end_idx = content.find("</think>")
- if start_idx < end_idx:
- yield "reasoning", content[start_idx:end_idx].strip()
- else:
- yield "content", content
- else:
- yield "content", content
- return
- if "message" in response and "content" in response["message"]:
- content = response["message"]["content"]
- current_content += content
- if "<think>" in current_content and "</think>" in current_content:
- while "<think>" in current_content and "</think>" in current_content:
- start_idx = current_content.find("<think>")
- end_idx = current_content.find("</think>")
- if start_idx < end_idx:
- reasoning = current_content[start_idx + 7:end_idx].strip()
- if reasoning:
- yield "reasoning", reasoning
- current_content = current_content[end_idx + 8:].strip()
- else:
- break
- if current_content and "<think>" not in current_content:
- yield "content", current_content
- current_content = ""
- except json.JSONDecodeError as e:
- logger.error(f"JSON 解析错误: {e}")
- continue
- break
- except asyncio.TimeoutError:
- retry_count += 1
- if retry_count < max_retries:
- delay = 2 ** retry_count
- logger.warning(f"请求超时，第 {retry_count} 次重试，等待 {delay} 秒...")
- await asyncio.sleep(delay)
- continue
- logger.error("达到最大重试次数，放弃请求")
- raise
- except Exception as e:
- logger.error(f"流式对话发生错误: {e}", exc_info=True)
- raise
- async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
- async for content_type, content in self.stream_chat(
- messages=messages,
- model=model
- ):
- if content_type in ("reasoning", "content"):
- yield content_type, content
- def _get_proxy_config(self) -> tuple[bool, str | None]:
- proxy = os.getenv("OLLAMA_PROXY")
- if proxy:
- logger.info(f"Ollama 客户端使用代理: {proxy}")
- else:
- logger.debug("Ollama 客户端未启用代理")
- return bool(proxy), proxy```
+ return False
+ for i in range(1, len(messages)):
+ if messages[i]["role"] == messages[i-1]["role"]:
+ return False
+ return True```
 ______________________________
 
-## ...\clients\__init__.py
+## .../deepclaude/__init__.py
 ```python
-from .base_client import BaseClient
-from .deepseek_client import DeepSeekClient
-from .claude_client import ClaudeClient
-from .ollama_r1 import OllamaR1Client
-__all__ = ['BaseClient', 'DeepSeekClient', 'ClaudeClient', 'OllamaR1Client']```
+```
 ______________________________
 
-## ...\deepclaude\deepclaude.py
+## .../deepclaude/deepclaude.py
 ```python
 import json
 import time
@@ -968,143 +1139,188 @@ class DeepClaude:
  return f"data: {json.dumps(response)}\n\n".encode('utf-8')```
 ______________________________
 
-## ...\deepclaude\__init__.py
+## .../test/test_deepseek_client.py
 ```python
-```
-______________________________
-
-## ...\utils\auth.py
-```python
-from fastapi import HTTPException, Header
-from typing import Optional
 import os
-from dotenv import load_dotenv
-from app.utils.logger import logger
-logger.info(f"当前工作目录: {os.getcwd()}")
-logger.info("尝试加载.env文件...")
-load_dotenv(override=True)
-ALLOW_API_KEY = os.getenv("ALLOW_API_KEY")
-logger.info(f"ALLOW_API_KEY环境变量状态: {'已设置' if ALLOW_API_KEY else '未设置'}")
-if not ALLOW_API_KEY:
- raise ValueError("ALLOW_API_KEY environment variable is not set")
-logger.info(f"Loaded API key starting with: {ALLOW_API_KEY[:4] if len(ALLOW_API_KEY) >= 4 else ALLOW_API_KEY}")
-async def verify_api_key(authorization: Optional[str] = Header(None)) -> None:
- if authorization is None:
- logger.warning("请求缺少Authorization header")
- raise HTTPException(
- status_code=401,
- detail="Missing Authorization header"
- )
- api_key = authorization.replace("Bearer ", "").strip()
- if api_key != ALLOW_API_KEY:
- logger.warning(f"无效的API密钥: {api_key}")
- raise HTTPException(
- status_code=401,
- detail="Invalid API key"
- )
- logger.info("API密钥验证通过")```
-______________________________
-
-## ...\utils\logger.py
-```python
-import logging
-import colorlog
 import sys
-import os
+import asyncio
 from dotenv import load_dotenv
-load_dotenv()
-def get_log_level() -> int:
- level_map = {
- 'DEBUG': logging.DEBUG,
- 'INFO': logging.INFO,
- 'WARNING': logging.WARNING,
- 'ERROR': logging.ERROR,
- 'CRITICAL': logging.CRITICAL
- }
- level = os.getenv('LOG_LEVEL', 'INFO').upper()
- return level_map.get(level, logging.INFO)
-def setup_logger(name: str = "DeepClaude") -> logging.Logger:
- logger = colorlog.getLogger(name)
- if logger.handlers:
- return logger
- log_level = get_log_level()
- logger.setLevel(log_level)
- console_handler = logging.StreamHandler(sys.stdout)
- console_handler.setLevel(log_level)
- formatter = colorlog.ColoredFormatter(
- "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
- datefmt="%Y-%m-%d %H:%M:%S",
- log_colors={
- 'DEBUG': 'cyan',
- 'INFO': 'green',
- 'WARNING': 'yellow',
- 'ERROR': 'red',
- 'CRITICAL': 'red,bg_white',
- }
- )
- console_handler.setFormatter(formatter)
- logger.addHandler(console_handler)
- return logger
-logger = setup_logger()```
-______________________________
-
-## ...\utils\message_processor.py
-```python
-from typing import List, Dict
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+from app.clients.deepseek_client import DeepSeekClient
 from app.utils.logger import logger
-class MessageProcessor:
- @staticmethod
- def convert_to_deepseek_format(messages: List[Dict]) -> List[Dict]:
- processed = []
- temp_content = []
- current_role = None
- for msg in messages:
- role = msg.get("role", "")
- content = msg.get("content", "")
- if not content:
- continue
- if role == "system":
- if processed and processed[0]["role"] == "system":
- processed[0]["content"] += f"\n{content}"
- else:
- processed.insert(0, {"role": "system", "content": content})
- continue
- if role == current_role:
- temp_content.append(content)
- else:
- if temp_content:
- processed.append({
- "role": current_role,
- "content": "\n".join(temp_content)
- })
- temp_content = [content]
- current_role = role
- if temp_content:
- processed.append({
- "role": current_role,
- "content": "\n".join(temp_content)
- })
- final_messages = []
- for i, msg in enumerate(processed):
- if i > 0 and msg["role"] == final_messages[-1]["role"]:
- if msg["role"] == "user":
- final_messages.append({"role": "assistant", "content": "请继续。"})
- else:
- final_messages.append({"role": "user", "content": "请继续。"})
- final_messages.append(msg)
- logger.debug(f"转换后的消息格式: {final_messages}")
- return final_messages
- @staticmethod
- def validate_messages(messages: List[Dict]) -> bool:
- if not messages:
- return False
- for i in range(1, len(messages)):
- if messages[i]["role"] == messages[i-1]["role"]:
- return False
- return True```
+load_dotenv()
+os.environ['LOG_LEVEL'] = 'DEBUG'
+async def test_deepseek_stream():
+ api_key = os.getenv("DEEPSEEK_API_KEY")
+ api_url = os.getenv("DEEPSEEK_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
+ is_origin_reasoning = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
+ logger.info("=== DeepSeek 客户端测试开始 ===")
+ logger.info(f"API URL: {api_url}")
+ logger.info(f"API Key 是否存在: {bool(api_key)}")
+ logger.info(f"原始推理模式: {is_origin_reasoning}")
+ if not api_key:
+ logger.error("请在 .env 文件中设置 DEEPSEEK_API_KEY")
+ return
+ messages = [
+ {"role": "user", "content": "1+1等于几?"}
+ ]
+ client = DeepSeekClient(api_key, api_url)
+ try:
+ logger.info("开始测试 DeepSeek 流式输出...")
+ logger.debug(f"发送消息: {messages}")
+ reasoning_buffer = []
+ content_buffer = []
+ async for content_type, content in client.stream_chat(
+ messages=messages,
+ model="deepseek-ai/DeepSeek-R1",
+ is_origin_reasoning=is_origin_reasoning
+ ):
+ if content_type == "reasoning":
+ reasoning_buffer.append(content)
+ if len(''.join(reasoning_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.debug(f"推理过程：{''.join(reasoning_buffer)}")
+ reasoning_buffer = []
+ elif content_type == "content":
+ content_buffer.append(content)
+ if len(''.join(content_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ content_buffer = []
+ if reasoning_buffer:
+ logger.debug(f"推理过程：{''.join(reasoning_buffer)}")
+ if content_buffer:
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ logger.info("=== DeepSeek 客户端测试完成 ===")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+ logger.error(f"错误类型: {type(e)}")
+def main():
+ asyncio.run(test_deepseek_stream())
+if __name__ == "__main__":
+ main()```
 ______________________________
 
-## ...\test\test_claude_client.py
+## .../test/test_deepclaude.py
+```python
+import os
+async def test_reasoning_fallback():
+ deepclaude = DeepClaude(...)
+ messages = [{"role": "user", "content": "测试问题"}]
+ os.environ['REASONING_PROVIDER'] = 'deepseek'
+ reasoning = await deepclaude._get_reasoning_with_fallback(
+ messages=messages,
+ model="deepseek-reasoner"
+ )
+ assert reasoning```
+______________________________
+
+## .../test/test_nvidia_deepseek.py
+```python
+import os
+import sys
+import asyncio
+from dotenv import load_dotenv
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+from app.clients.deepseek_client import DeepSeekClient
+from app.utils.logger import logger
+load_dotenv()
+async def test_nvidia_deepseek_stream():
+ api_key = os.getenv("DEEPSEEK_API_KEY")
+ api_url = os.getenv("DEEPSEEK_API_URL")
+ logger.info("=== NVIDIA DeepSeek 客户端测试开始 ===")
+ logger.info(f"API URL: {api_url}")
+ logger.info(f"API Key 是否存在: {bool(api_key)}")
+ if not api_key:
+ logger.error("请在 .env 文件中设置 DEEPSEEK_API_KEY")
+ return
+ messages = [
+ {"role": "user", "content": "Which number is larger, 9.11 or 9.8?"}
+ ]
+ client = DeepSeekClient(
+ api_key=api_key,
+ api_url=api_url,
+ provider="nvidia"
+ )
+ try:
+ logger.info("开始测试 NVIDIA DeepSeek 流式输出...")
+ logger.debug(f"发送消息: {messages}")
+ reasoning_buffer = []
+ content_buffer = []
+ async for content_type, content in client.stream_chat(
+ messages=messages,
+ model="deepseek-ai/deepseek-r1"
+ ):
+ if content_type == "reasoning":
+ reasoning_buffer.append(content)
+ if len(''.join(reasoning_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.debug(f"推理过程：{''.join(reasoning_buffer)}")
+ reasoning_buffer = []
+ elif content_type == "content":
+ content_buffer.append(content)
+ if len(''.join(content_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ content_buffer = []
+ if reasoning_buffer:
+ logger.debug(f"推理过程：{''.join(reasoning_buffer)}")
+ if content_buffer:
+ logger.info(f"最终答案：{''.join(content_buffer)}")
+ logger.info("=== NVIDIA DeepSeek 客户端测试完成 ===")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+def main():
+ asyncio.run(test_nvidia_deepseek_stream())
+if __name__ == "__main__":
+ main()```
+______________________________
+
+## .../test/test_ollama_r1.py
+```python
+import os
+import sys
+import asyncio
+from dotenv import load_dotenv
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+from app.clients.ollama_r1 import OllamaR1Client
+from app.utils.logger import logger
+load_dotenv()
+os.environ['LOG_LEVEL'] = 'DEBUG'
+async def test_ollama_stream():
+ api_url = os.getenv("OLLAMA_API_URL", "http://192.168.100.81:11434/api/chat")
+ logger.info(f"API URL: {api_url}")
+ client = OllamaR1Client(api_url)
+ try:
+ messages = [
+ {"role": "user", "content": "9.9和9.11谁大?"}
+ ]
+ logger.info("开始测试 Ollama R1 流式输出...")
+ logger.debug(f"发送消息: {messages}")
+ async for msg_type, content in client.stream_chat(messages):
+ if msg_type == "reasoning":
+ logger.info(f"推理过程: {content}")
+ else:
+ logger.info(f"最终答案: {content}")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {e}", exc_info=True)
+ raise
+async def test_ollama_connection():
+ api_url = os.getenv("OLLAMA_API_URL")
+ assert api_url, "OLLAMA_API_URL 未设置"
+ client = OllamaR1Client(api_url)
+ messages = [{"role": "user", "content": "测试连接"}]
+ try:
+ async for _, _ in client.stream_chat(messages):
+ pass
+ return True
+ except Exception as e:
+ logger.error(f"Ollama 连接测试失败: {e}")
+ return False
+if __name__ == "__main__":
+ asyncio.run(test_ollama_stream())```
+______________________________
+
+## .../test/test_claude_client.py
 ```python
 import os
 import sys
@@ -1153,116 +1369,9 @@ if __name__ == "__main__":
  main()```
 ______________________________
 
-## ...\test\test_deepclaude.py
-```python
-import os
-async def test_reasoning_fallback():
- deepclaude = DeepClaude(...)
- messages = [{"role": "user", "content": "测试问题"}]
- os.environ['REASONING_PROVIDER'] = 'deepseek'
- reasoning = await deepclaude._get_reasoning_with_fallback(
- messages=messages,
- model="deepseek-reasoner"
- )
- assert reasoning```
-______________________________
-
-## ...\test\test_deepseek_client.py
-```python
-import os
-import sys
-import asyncio
-from dotenv import load_dotenv
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, project_root)
-from app.clients.deepseek_client import DeepSeekClient
-from app.utils.logger import logger
-load_dotenv()
-os.environ['LOG_LEVEL'] = 'DEBUG'
-async def test_deepseek_stream():
- api_key = os.getenv("DEEPSEEK_API_KEY")
- api_url = os.getenv("DEEPSEEK_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
- is_origin_reasoning = os.getenv("IS_ORIGIN_REASONING", "True").lower() == "true"
- logger.info(f"API URL: {api_url}")
- logger.info(f"API Key 是否存在: {bool(api_key)}")
- logger.info(f"原始推理模式: {is_origin_reasoning}")
- if not api_key:
- logger.error("请在 .env 文件中设置 DEEPSEEK_API_KEY")
- return
- messages = [
- {"role": "user", "content": "1+1等于几?"}
- ]
- client = DeepSeekClient(api_key, api_url)
- try:
- logger.info("开始测试 DeepSeek 流式输出...")
- logger.debug(f"发送消息: {messages}")
- async for content_type, content in client.stream_chat(
- messages=messages,
- model="deepseek-ai/DeepSeek-R1",
- is_origin_reasoning=is_origin_reasoning
- ):
- if content_type == "reasoning":
- logger.info(f"收到推理内容: {content}")
- elif content_type == "content":
- logger.info(f"收到最终答案: {content}")
- except Exception as e:
- logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
- logger.error(f"错误类型: {type(e)}")
-def main():
- asyncio.run(test_deepseek_stream())
-if __name__ == "__main__":
- main()```
-______________________________
-
-## ...\test\test_ollama_r1.py
-```python
-import os
-import sys
-import asyncio
-from dotenv import load_dotenv
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, project_root)
-from app.clients.ollama_r1 import OllamaR1Client
-from app.utils.logger import logger
-load_dotenv()
-os.environ['LOG_LEVEL'] = 'DEBUG'
-async def test_ollama_stream():
- api_url = os.getenv("OLLAMA_API_URL", "http://192.168.100.81:11434/api/chat")
- logger.info(f"API URL: {api_url}")
- client = OllamaR1Client(api_url)
- try:
- messages = [
- {"role": "user", "content": "9.9和9.11谁大?"}
- ]
- logger.info("开始测试 Ollama R1 流式输出...")
- logger.debug(f"发送消息: {messages}")
- async for msg_type, content in client.stream_chat(messages):
- if msg_type == "reasoning":
- logger.info(f"推理过程: {content}")
- else:
- logger.info(f"最终答案: {content}")
- except Exception as e:
- logger.error(f"测试过程中发生错误: {e}", exc_info=True)
- raise
-async def test_ollama_connection():
- api_url = os.getenv("OLLAMA_API_URL")
- assert api_url, "OLLAMA_API_URL 未设置"
- client = OllamaR1Client(api_url)
- messages = [{"role": "user", "content": "测试连接"}]
- try:
- async for _, _ in client.stream_chat(messages):
- pass
- return True
- except Exception as e:
- logger.error(f"Ollama 连接测试失败: {e}")
- return False
-if __name__ == "__main__":
- asyncio.run(test_ollama_stream())```
-______________________________
-
 # 配置文件
 
-## .\Dockerfile
+## ./Dockerfile
 ```dockerfile
 # 使用 Python 3.11 slim 版本作为基础镜像
 # slim版本是一个轻量级的Python镜像，只包含运行Python应用所必需的组件
