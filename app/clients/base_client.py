@@ -28,6 +28,11 @@ class BaseClient(ABC):
         self.api_key = api_key
         self.api_url = api_url
         
+    def _get_proxy(self) -> str | None:
+        """获取代理配置"""
+        use_proxy, proxy = self._get_proxy_config()
+        return proxy if use_proxy else None
+
     @abstractmethod
     def _get_proxy_config(self) -> tuple[bool, str | None]:
         """获取代理配置
@@ -67,49 +72,61 @@ class BaseClient(ABC):
         pass
     
     async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
-        try:
-            # 获取代理配置 - 由子类实现具体逻辑
-            use_proxy, proxy = self._get_proxy_config()
-            
-            # 创建 TCP 连接器
-            connector = aiohttp.TCPConnector(
-                ssl=False,
-                force_close=True,
-                enable_cleanup_closed=True
-            )
-            
-            # 设置超时时间
-            timeout = aiohttp.ClientTimeout(
-                total=120,
-                connect=30,
-                sock_read=60
-            )
-            
-            async with aiohttp.ClientSession(connector=connector) as session:
-                logger.debug(f"正在发送请求到: {self.api_url}")
-                if use_proxy:
-                    logger.debug(f"使用代理: {proxy}")
-                
-                async with session.post(
-                    self.api_url,
-                    headers=headers,
-                    json=data,
-                    proxy=proxy if use_proxy else None,
-                    timeout=timeout
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        error_msg = f"API请求失败: HTTP {response.status}\n{error_text}"
-                        logger.error(error_msg)
-                        raise Exception(error_msg)
+        max_retries = 3
+        retry_count = 0
+        retry_codes = {429, 500, 502, 503, 504}  # 可重试的状态码
+        
+        while retry_count < max_retries:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        self.api_url,
+                        headers=headers,
+                        json=data,
+                        proxy=self._get_proxy(),
+                        timeout=aiohttp.ClientTimeout(
+                            total=60,
+                            connect=10,
+                            sock_read=30
+                        )
+                    ) as response:
+                        if response.status != 200:
+                            error_msg = await response.text()
+                            logger.error(f"API请求失败: HTTP {response.status}\n{error_msg}")
+                            
+                            if response.status in retry_codes:
+                                retry_count += 1
+                                wait_time = min(2 ** retry_count, 32)  # 最大等待32秒
+                                logger.warning(f"等待 {wait_time} 秒后重试...")
+                                await asyncio.sleep(wait_time)
+                                continue
+                                
+                            raise Exception(f"HTTP {response.status}: {error_msg}")
+                            
+                        # 使用更高效的缓冲区处理
+                        buffer = bytearray()
+                        async for chunk in response.content.iter_chunks():
+                            chunk_data = chunk[0]  # iter_chunks 返回 (data, end_of_http_chunk) 元组
+                            if not chunk_data:
+                                continue
+                                
+                            buffer.extend(chunk_data)
+                            while b"\n" in buffer:
+                                line, remainder = buffer.split(b"\n", 1)
+                                if line:
+                                    yield line
+                                buffer = remainder
+                                
+                        if buffer:
+                            yield bytes(buffer)
+                        break
+                            
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    logger.error(f"请求重试次数超过上限: {e}")
+                    raise
                     
-                    async for chunk in response.content.iter_any():
-                        if chunk:
-                            yield chunk
-                        
-        except asyncio.TimeoutError as e:
-            logger.error(f"请求超时: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"请求发生错误: {e}")
-            raise
+                wait_time = min(2 ** retry_count, 32)
+                logger.warning(f"网络错误，等待 {wait_time} 秒后重试: {e}")
+                await asyncio.sleep(wait_time)

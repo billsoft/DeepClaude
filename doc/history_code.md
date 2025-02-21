@@ -3,6 +3,7 @@
 .
 ├── Dockerfile
 ├── main.py
+├── setup.py
 ├── .cursor/
 │   ├── rules/
 ├── .github/
@@ -77,11 +78,30 @@ if __name__ == '__main__':
  main()```
 ______________________________
 
+## .\setup.py
+```python
+from setuptools import setup, find_packages
+setup(
+ name="deepclaude",
+ version="0.1",
+ packages=find_packages(),
+ install_requires=[
+ "fastapi",
+ "uvicorn",
+ "python-dotenv",
+ "aiohttp",
+ "colorlog"
+ ]
+)```
+______________________________
+
 ## ...\app\main.py
 ```python
 import os
 import sys
 from dotenv import load_dotenv
+import uuid
+import time
 load_dotenv()
 def setup_proxy():
  enable_proxy = os.getenv('ENABLE_PROXY', 'false').lower() == 'true'
@@ -98,6 +118,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.utils.logger import logger
 from app.utils.auth import verify_api_key
 from app.deepclaude.deepclaude import DeepClaude
+from fastapi.responses import JSONResponse
 app = FastAPI(title="DeepClaude API")
 ALLOW_ORIGINS = os.getenv("ALLOW_ORIGINS", "*")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
@@ -172,70 +193,45 @@ async def list_models():
 @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
 async def chat_completions(request: Request):
  try:
- body = await request.json()
- logger.debug(f"收到请求数据: {body}")
- messages = body.get("messages")
- logger.debug(f"消息内容: {messages}")
- processed_messages = []
- for i, msg in enumerate(messages):
- if i == 0 or msg.get("role") != processed_messages[-1].get("role"):
- processed_messages.append(msg)
- else:
- processed_messages[-1]["content"] += f"\n{msg.get('content', '')}"
- model_arg = get_and_validate_params(body)
- stream = model_arg[4]
- if stream:
- try:
- logger.debug(f"开始流式处理，使用处理后的消息: {processed_messages}")
- stream_response = deep_claude.chat_completions_with_stream(
- messages=processed_messages,
- model_arg=model_arg[:4],
- deepseek_model=DEEPSEEK_MODEL,
- claude_model=CLAUDE_MODEL
- )
+ data = await request.json()
+ if "messages" not in data:
+ raise ValueError("Missing messages parameter")
+ if data.get("stream", False):
  return StreamingResponse(
- stream_response,
+ deep_claude.chat_completions_with_stream(
+ messages=data["messages"],
+ chat_id=f"chatcmpl-{uuid.uuid4()}",
+ created_time=int(time.time()),
+ model=data.get("model", "deepclaude")
+ ),
  media_type="text/event-stream",
  headers={
- "X-Accel-Buffering": "no",
  "Cache-Control": "no-cache, no-transform",
  "Connection": "keep-alive",
  "Content-Type": "text/event-stream;charset=utf-8",
+ "X-Accel-Buffering": "no",
  "Transfer-Encoding": "chunked",
- "Access-Control-Allow-Origin": "*",
- "Access-Control-Allow-Methods": "POST, OPTIONS",
- "Access-Control-Allow-Headers": "*"
+ "Keep-Alive": "timeout=600"
  }
  )
- except ValueError as e:
- error_msg = str(e)
- logger.warning(f"业务逻辑错误: {error_msg}")
- return {"error": True, "message": error_msg}
- except Exception as e:
- error_msg = f"流式处理错误: {str(e)}"
- logger.error(error_msg, exc_info=True)
- return {"error": True, "message": "network error"}
  else:
- try:
  response = await deep_claude.chat_completions_without_stream(
- messages=processed_messages,
- model_arg=model_arg[:4],
- deepseek_model=DEEPSEEK_MODEL,
- claude_model=CLAUDE_MODEL
+ messages=data["messages"],
+ model_arg=get_and_validate_params(data)
  )
- return response
+ return JSONResponse(content=response)
  except ValueError as e:
- error_msg = str(e)
- logger.warning(f"业务逻辑错误: {error_msg}")
- return {"error": True, "message": error_msg}
+ logger.warning(f"参数验证错误: {e}")
+ return JSONResponse(
+ status_code=400,
+ content={"error": str(e)}
+ )
  except Exception as e:
- error_msg = f"非流式处理错误: {str(e)}"
- logger.error(error_msg, exc_info=True)
- return {"error": True, "message": "network error"}
- except Exception as e:
- error_msg = f"处理请求时发生错误: {str(e)}"
- logger.error(error_msg, exc_info=True)
- return {"error": True, "message": "network error"}
+ logger.error(f"处理请求时发生错误: {e}", exc_info=True)
+ return JSONResponse(
+ status_code=500,
+ content={"error": "Internal server error"}
+ )
 def get_and_validate_params(body: dict) -> tuple:
  temperature: float = body.get("temperature", 0.5)
  top_p: float = body.get("top_p", 0.9)
@@ -262,6 +258,9 @@ class BaseClient(ABC):
  def __init__(self, api_key: str, api_url: str):
  self.api_key = api_key
  self.api_url = api_url
+ def _get_proxy(self) -> str | None:
+ use_proxy, proxy = self._get_proxy_config()
+ return proxy if use_proxy else None
  @abstractmethod
  def _get_proxy_config(self) -> tuple[bool, str | None]:
  pass
@@ -275,43 +274,55 @@ class BaseClient(ABC):
  def _extract_reasoning(self, content: str) -> tuple[bool, str]:
  pass
  async def _make_request(self, headers: dict, data: dict) -> AsyncGenerator[bytes, None]:
+ max_retries = 3
+ retry_count = 0
+ retry_codes = {429, 500, 502, 503, 504}
+ while retry_count < max_retries:
  try:
- use_proxy, proxy = self._get_proxy_config()
- connector = aiohttp.TCPConnector(
- ssl=False,
- force_close=True,
- enable_cleanup_closed=True
- )
- timeout = aiohttp.ClientTimeout(
- total=120,
- connect=30,
- sock_read=60
- )
- async with aiohttp.ClientSession(connector=connector) as session:
- logger.debug(f"正在发送请求到: {self.api_url}")
- if use_proxy:
- logger.debug(f"使用代理: {proxy}")
+ async with aiohttp.ClientSession() as session:
  async with session.post(
  self.api_url,
  headers=headers,
  json=data,
- proxy=proxy if use_proxy else None,
- timeout=timeout
+ proxy=self._get_proxy(),
+ timeout=aiohttp.ClientTimeout(
+ total=60,
+ connect=10,
+ sock_read=30
+ )
  ) as response:
  if response.status != 200:
- error_text = await response.text()
- error_msg = f"API请求失败: HTTP {response.status}\n{error_text}"
- logger.error(error_msg)
- raise Exception(error_msg)
- async for chunk in response.content.iter_any():
- if chunk:
- yield chunk
- except asyncio.TimeoutError as e:
- logger.error(f"请求超时: {e}")
+ error_msg = await response.text()
+ logger.error(f"API请求失败: HTTP {response.status}\n{error_msg}")
+ if response.status in retry_codes:
+ retry_count += 1
+ wait_time = min(2 ** retry_count, 32)
+ logger.warning(f"等待 {wait_time} 秒后重试...")
+ await asyncio.sleep(wait_time)
+ continue
+ raise Exception(f"HTTP {response.status}: {error_msg}")
+ buffer = bytearray()
+ async for chunk in response.content.iter_chunks():
+ chunk_data = chunk[0]
+ if not chunk_data:
+ continue
+ buffer.extend(chunk_data)
+ while b"\n" in buffer:
+ line, remainder = buffer.split(b"\n", 1)
+ if line:
+ yield line
+ buffer = remainder
+ if buffer:
+ yield bytes(buffer)
+ break
+ except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+ retry_count += 1
+ if retry_count >= max_retries:
+ logger.error(f"请求重试次数超过上限: {e}")
  raise
- except Exception as e:
- logger.error(f"请求发生错误: {e}")
- raise```
+ wait_time = min(2 ** retry_count, 32)
+ logger.warning(f"网络错误，等待 {wait_time} 秒后重试: {e}")
+ await asyncio.sleep(wait_time)```
 ______________________________
 
 ## ...\clients\claude_client.py
@@ -339,70 +350,62 @@ class ClaudeClient(BaseClient):
  return True, https_proxy or http_proxy
  logger.debug("Claude 客户端未启用代理")
  return False, None
- async def stream_chat(self, messages: list, **kwargs):
- if self.provider == "anthropic":
+ def _prepare_headers(self) -> dict:
  headers = {
+ "Content-Type": "application/json",
+ "Accept": "text/event-stream",
+ }
+ if self.provider == "anthropic":
+ headers.update({
  "x-api-key": self.api_key,
  "anthropic-version": "2023-06-01",
- "content-type": "application/json",
  "anthropic-beta": "messages-2023-12-15"
- }
- formatted_messages = []
- for msg in messages:
- if msg["role"] == "user":
- formatted_messages.append({
- "role": "user",
- "content": msg["content"]
  })
- elif msg["role"] == "assistant":
- formatted_messages.append({
- "role": "assistant",
- "content": msg["content"]
- })
+ elif self.provider == "openrouter":
+ headers["Authorization"] = f"Bearer {self.api_key}"
+ elif self.provider == "oneapi":
+ headers["Authorization"] = f"Bearer {self.api_key}"
+ return headers
+ def _prepare_request_data(self, messages: list, **kwargs) -> dict:
  data = {
- "model": kwargs.get('model', 'claude-3-5-sonnet-20241022'),
- "messages": formatted_messages,
- "max_tokens": kwargs.get('max_tokens', 8192),
- "temperature": kwargs.get('temperature', 0.7),
- "top_p": kwargs.get('top_p', 0.9),
+ "model": kwargs.get("model", "claude-3-5-sonnet-20241022"),
+ "messages": messages,
+ "max_tokens": kwargs.get("max_tokens", 8192),
+ "temperature": kwargs.get("temperature", 0.7),
+ "top_p": kwargs.get("top_p", 0.9),
  "stream": True
  }
+ logger.debug(f"Claude请求数据: {messages}")
+ return data
+ async def stream_chat(self, messages: list, **kwargs) -> AsyncGenerator[dict, None]:
+ try:
+ headers = self._prepare_headers()
+ data = self._prepare_request_data(messages, **kwargs)
  logger.debug(f"Claude请求数据: {data}")
- try:
  async for chunk in self._make_request(headers, data):
- chunk_str = chunk.decode('utf-8')
- if not chunk_str.strip():
- continue
- for line in chunk_str.split('\n'):
- if line.startswith('data: '):
- json_str = line[6:]
- if json_str.strip() == '[DONE]':
- return
  try:
- response = json.loads(json_str)
- if response.get('type') == 'content_block_delta':
- content = response.get('delta', {}).get('text', '')
+ if chunk:
+ text = chunk.decode('utf-8')
+ if text.startswith('data: '):
+ data = text[6:].strip()
+ if data == '[DONE]':
+ break
+ response = json.loads(data)
+ logger.debug(f"Claude响应数据: {response}")
+ if 'type' in response:
+ if response['type'] == 'content_block_delta':
+ content = response['delta'].get('text', '')
  if content:
- yield "answer", content
- except json.JSONDecodeError:
+ yield {"delta": {"content": content}}
+ elif 'choices' in response:
+ if response['choices'][0].get('delta', {}).get('content'):
+ yield response['choices'][0]
+ except json.JSONDecodeError as e:
+ logger.error(f"解析Claude响应失败: {e}")
  continue
  except Exception as e:
- logger.error(f"Claude请求失败: {e}")
+ logger.error(f"Claude流式请求失败: {e}", exc_info=True)
  raise
- elif self.provider == "openrouter":
- headers = {
- "Authorization": f"Bearer {self.api_key}",
- "Content-Type": "application/json",
- "HTTP-Referer": "https://github.com/ErlichLiu/DeepClaude",
- "X-Title": "DeepClaude"
- }
- elif self.provider == "oneapi":
- headers = {
- "Authorization": f"Bearer {self.api_key}",
- "Content-Type": "application/json"
- }
- else:
- raise ValueError(f"不支持的Claude Provider: {self.provider}")
  async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
  return
  yield```
@@ -622,7 +625,6 @@ class OllamaR1Client(BaseClient):
  logger.debug(f"开始流式对话：{data}")
  try:
  current_content = ""
- last_content = ""
  async for chunk in self._make_request(headers, data):
  chunk_str = chunk.decode('utf-8')
  if not chunk_str.strip():
@@ -631,21 +633,19 @@ class OllamaR1Client(BaseClient):
  response = json.loads(chunk_str)
  if "message" in response and "content" in response["message"]:
  content = response["message"]["content"]
- if content == last_content:
- continue
- last_content = content
  has_think_start = "<think>" in content
  has_think_end = "</think>" in content
  if has_think_start and not has_think_end:
  current_content = content
- continue
  elif has_think_end and current_content:
  full_content = current_content + content
  has_reasoning, reasoning = self._extract_reasoning(full_content)
  if has_reasoning:
  yield "reasoning", reasoning
  current_content = ""
- elif not has_think_start and not has_think_end:
+ elif current_content:
+ current_content += content
+ else:
  yield "content", content
  if response.get("done"):
  if current_content:
@@ -668,12 +668,17 @@ class OllamaR1Client(BaseClient):
  if content_type == "reasoning":
  yield content_type, content
  def _get_proxy_config(self) -> tuple[bool, str | None]:
- proxy = os.getenv("OLLAMA_PROXY")
- if proxy:
- logger.info(f"Ollama 客户端使用代理: {proxy}")
+ enable_proxy = os.getenv('OLLAMA_ENABLE_PROXY', 'false').lower() == 'true'
+ if enable_proxy:
+ http_proxy = os.getenv('HTTP_PROXY')
+ https_proxy = os.getenv('HTTPS_PROXY')
+ if https_proxy or http_proxy:
+ logger.info(f"Ollama 客户端使用代理: {https_proxy or http_proxy}")
  else:
+ logger.warning("已启用 Ollama 代理但未设置代理地址")
+ return True, https_proxy or http_proxy
  logger.debug("Ollama 客户端未启用代理")
- return bool(proxy), proxy```
+ return False, None```
 ______________________________
 
 ## ...\clients\__init__.py
@@ -761,58 +766,59 @@ class DeepClaude:
  except Exception as e:
  logger.error(f"处理流式响应时发生错误: {e}", exc_info=True)
  raise
- async def chat_completions_with_stream(self, messages: list, model_arg: tuple = None, **kwargs):
+ async def _handle_api_error(self, e: Exception) -> str:
+ if isinstance(e, aiohttp.ClientError):
+ return "网络连接错误，请检查网络连接"
+ elif isinstance(e, asyncio.TimeoutError):
+ return "请求超时，请稍后重试"
+ elif isinstance(e, ValueError):
+ return f"参数错误: {str(e)}"
+ else:
+ return f"未知错误: {str(e)}"
+ async def chat_completions_with_stream(self, messages: list, **kwargs):
  try:
- yield self._format_stream_response("", **kwargs)
- reasoning_content = []
+ logger.info("开始流式处理请求...")
  provider = self._get_reasoning_provider()
+ async for content_type, content in provider.get_reasoning(
+ messages=messages,
+ **self._prepare_thinker_kwargs(kwargs)
+ ):
+ if content_type == "reasoning":
+ yield self._format_stream_response(content, **kwargs)
+ prompt = self._format_claude_prompt(
+ messages[-1]['content'],
+ reasoning_content
+ )
+ async for chunk in self.claude_client.stream_chat(
+ messages=[{"role": "user", "content": prompt}],
+ **self._prepare_answerer_kwargs(kwargs)
+ ):
+ if chunk and "content" in chunk.get("delta", {}):
+ yield self._format_stream_response(
+ chunk["delta"]["content"],
+ **kwargs
+ )
+ except Exception as e:
+ error_msg = await self._handle_api_error(e)
+ logger.error(f"流式处理错误: {error_msg}", exc_info=True)
+ yield self._format_stream_response(f"错误: {error_msg}", **kwargs)
+ def _prepare_thinker_kwargs(self, kwargs: dict) -> dict:
  provider_type = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
  if provider_type == 'ollama':
  model = "deepseek-r1:32b"
- provider_kwargs = {}
- logger.info(f"使用 Ollama 模型: {model}")
  else:
- model = kwargs.get('deepseek_model', 'deepseek-ai/DeepSeek-R1')
- provider_kwargs = {'model_arg': model_arg} if model_arg else {}
- logger.info(f"使用 DeepSeek 模型: {model}")
- yield self._format_stream_response("🤔 思考过程:\n", **kwargs)
- try:
- async for content_type, content in provider.get_reasoning(
- messages=messages,
- model=model,
- **provider_kwargs
- ):
- if content_type == "reasoning":
- if content and content.strip():
- for chunk in self._chunk_content(content, chunk_size=3):
- yield self._format_stream_response(chunk, **kwargs)
- await asyncio.sleep(0.01)
- reasoning_content.append(content)
- if reasoning_content:
- yield self._format_stream_response("\n\n---\n最终答案：\n\n", **kwargs)
- prompt = self._format_claude_prompt(messages[-1]['content'], "\n".join(reasoning_content))
- claude_messages = [{"role": "user", "content": prompt}]
- async for content_type, content in self.claude_client.stream_chat(
- messages=claude_messages,
- model=kwargs.get('claude_model', 'claude-3-5-sonnet-20241022'),
- max_tokens=8192,
- temperature=0.7,
- top_p=0.9
- ):
- if content_type == "answer":
- for chunk in self._chunk_content(content, chunk_size=3):
- yield self._format_stream_response(chunk, **kwargs)
- await asyncio.sleep(0.01)
- else:
- logger.warning("没有获取到有效的思考内容")
- yield self._format_stream_response("❌ 无法获取有效的思考内容", **kwargs)
- except Exception as e:
- logger.error(f"获取回答失败: {e}")
- yield self._format_stream_response("❌ 获取回答失败，请稍后重试", **kwargs)
- yield self._format_stream_response("[DONE]", **kwargs)
- except Exception as e:
- logger.error(f"处理请求时发生错误: {e}")
- yield self._format_stream_response("❌ 服务出现错误，请稍后重试", **kwargs)
+ model = kwargs.get('model', 'deepseek-ai/DeepSeek-R1')
+ return {
+ 'model': model,
+ 'temperature': kwargs.get('temperature', 0.7),
+ 'top_p': kwargs.get('top_p', 0.9)
+ }
+ def _prepare_answerer_kwargs(self, kwargs: dict) -> dict:
+ return {
+ 'model': 'claude-3-5-sonnet-20241022',
+ 'temperature': kwargs.get('temperature', 0.7),
+ 'top_p': kwargs.get('top_p', 0.9)
+ }
  def _chunk_content(self, content: str, chunk_size: int = 3) -> list[str]:
  return [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
  def _format_claude_prompt(self, original_question: str, reasoning: str) -> str:
@@ -951,22 +957,33 @@ class DeepClaude:
  if not self.ollama_api_url:
  raise ValueError("使用 Ollama 时必须提供 API URL")
  def _format_stream_response(self, content: str, **kwargs) -> bytes:
- if not content:
- return b""
  response = {
- "id": kwargs.get('chat_id', 'chatcmpl-default'),
+ "id": kwargs.get("chat_id", f"chatcmpl-{int(time.time())}"),
  "object": "chat.completion.chunk",
- "created": kwargs.get('created_time', int(time.time())),
- "model": kwargs.get('model', 'deepclaude'),
+ "created": kwargs.get("created_time", int(time.time())),
+ "model": kwargs.get("model", "deepclaude"),
  "choices": [{
  "index": 0,
  "delta": {
  "content": content
- },
- "finish_reason": None
+ }
  }]
  }
- return f"data: {json.dumps(response)}\n\n".encode('utf-8')```
+ return f"data: {json.dumps(response)}\n\n".encode('utf-8')
+ def _validate_kwargs(self, kwargs: dict) -> None:
+ temperature = kwargs.get('temperature')
+ if temperature is not None:
+ if not isinstance(temperature, (int, float)) or temperature < 0 or temperature > 1:
+ raise ValueError("temperature 必须在 0 到 1 之间")
+ top_p = kwargs.get('top_p')
+ if top_p is not None:
+ if not isinstance(top_p, (int, float)) or top_p < 0 or top_p > 1:
+ raise ValueError("top_p 必须在 0 到 1 之间")
+ model = kwargs.get('model')
+ if model and not isinstance(model, str):
+ raise ValueError("model 必须是字符串类型")
+ def _split_into_tokens(self, text: str) -> list[str]:
+ return list(text)```
 ______________________________
 
 ## ...\deepclaude\__init__.py

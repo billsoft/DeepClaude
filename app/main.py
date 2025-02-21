@@ -2,6 +2,8 @@
 import os  # 用于操作系统相关功能，如环境变量读取
 import sys  # 用于系统相关功能，如程序退出
 from dotenv import load_dotenv  # 用于加载.env文件中的环境变量
+import uuid
+import time
 
 # 加载环境变量配置
 # 从.env文件中读取配置，支持本地开发环境和生产环境的配置分离
@@ -32,6 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware  # 处理跨域请求的中�
 from app.utils.logger import logger  # 日志工具
 from app.utils.auth import verify_api_key  # API密钥验证
 from app.deepclaude.deepclaude import DeepClaude  # DeepClaude核心类
+from fastapi.responses import JSONResponse  # 用于返回JSON响应
 
 app = FastAPI(title="DeepClaude API")
 
@@ -193,106 +196,52 @@ async def list_models():
 
 @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
 async def chat_completions(request: Request):
-    """处理聊天完成请求
-    
-    支持流式和非流式输出，需要API密钥验证
-    请求体格式遵循OpenAI API标准
-    
-    Args:
-        request (Request): FastAPI请求对象，包含以下字段：
-            - messages: 消息历史列表
-            - model: 模型名称（可选）
-            - stream: 是否使用流式输出（可选，默认True）
-            - temperature: 采样温度（可选，默认0.5）
-            - top_p: 核采样（可选，默认0.9）
-            - presence_penalty: 主题新鲜度（可选，默认0.0）
-            - frequency_penalty: 词频惩罚度（可选，默认0.0）
-    
-    Returns:
-        Union[StreamingResponse, dict]: 
-            - 流式输出时返回StreamingResponse对象
-            - 非流式输出时返回包含回复内容的字典
-    
-    Raises:
-        HTTPException: 请求参数验证失败时抛出
-        Exception: 处理过程中的其他错误
-    """
-
     try:
-        body = await request.json()
-        logger.debug(f"收到请求数据: {body}")
+        data = await request.json()
         
-        messages = body.get("messages")
-        logger.debug(f"消息内容: {messages}")
-        
-        # 预处理消息，移除连续的相同角色消息
-        processed_messages = []
-        for i, msg in enumerate(messages):
-            if i == 0 or msg.get("role") != processed_messages[-1].get("role"):
-                processed_messages.append(msg)
-            else:
-                # 合并连续相同角色的消息内容
-                processed_messages[-1]["content"] += f"\n{msg.get('content', '')}"
-        
-        model_arg = get_and_validate_params(body)
-        stream = model_arg[4]
-        
-        if stream:
-            try:
-                logger.debug(f"开始流式处理，使用处理后的消息: {processed_messages}")
-                stream_response = deep_claude.chat_completions_with_stream(
-                    messages=processed_messages,
-                    model_arg=model_arg[:4],
-                    deepseek_model=DEEPSEEK_MODEL,
-                    claude_model=CLAUDE_MODEL
-                )
-                return StreamingResponse(
-                    stream_response,
-                    media_type="text/event-stream",
-                    headers={
-                        "X-Accel-Buffering": "no",  # 禁用nginx缓冲
-                        "Cache-Control": "no-cache, no-transform",  # 禁用缓存
-                        "Connection": "keep-alive",
-                        "Content-Type": "text/event-stream;charset=utf-8",
-                        "Transfer-Encoding": "chunked",
-                        "Access-Control-Allow-Origin": "*",
-                        "Access-Control-Allow-Methods": "POST, OPTIONS",
-                        "Access-Control-Allow-Headers": "*"
-                    }
-                )
-            except ValueError as e:
-                error_msg = str(e)
-                logger.warning(f"业务逻辑错误: {error_msg}")
-                return {"error": True, "message": error_msg}
-            except Exception as e:
-                error_msg = f"流式处理错误: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-                return {"error": True, "message": "network error"}
+        # 验证必要参数
+        if "messages" not in data:
+            raise ValueError("Missing messages parameter")
+            
+        if data.get("stream", False):
+            # 设置完整的 SSE 响应头
+            return StreamingResponse(
+                deep_claude.chat_completions_with_stream(
+                    messages=data["messages"],
+                    chat_id=f"chatcmpl-{uuid.uuid4()}",
+                    created_time=int(time.time()),
+                    model=data.get("model", "deepclaude")
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "Content-Type": "text/event-stream;charset=utf-8",
+                    "X-Accel-Buffering": "no",
+                    "Transfer-Encoding": "chunked",
+                    "Keep-Alive": "timeout=600"
+                }
+            )
         else:
-            try:
-                response = await deep_claude.chat_completions_without_stream(
-                    messages=processed_messages,  # 使用处理后的消息
-                    model_arg=model_arg[:4],
-                    deepseek_model=DEEPSEEK_MODEL,
-                    claude_model=CLAUDE_MODEL
-                )
-                return response
-            except ValueError as e:
-                # 处理业务逻辑错误
-                error_msg = str(e)
-                logger.warning(f"业务逻辑错误: {error_msg}")
-                return {"error": True, "message": error_msg}
-            except Exception as e:
-                # 处理其他错误
-                error_msg = f"非流式处理错误: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-                return {"error": True, "message": "network error"}
-                
+            # 处理非流式请求
+            response = await deep_claude.chat_completions_without_stream(
+                messages=data["messages"],
+                model_arg=get_and_validate_params(data)
+            )
+            return JSONResponse(content=response)
+            
+    except ValueError as e:
+        logger.warning(f"参数验证错误: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(e)}
+        )
     except Exception as e:
-        error_msg = f"处理请求时发生错误: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        return {"error": True, "message": "network error"}
-
+        logger.error(f"处理请求时发生错误: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error"}
+        )
 
 def get_and_validate_params(body: dict) -> tuple:
     """提取并验证请求参数

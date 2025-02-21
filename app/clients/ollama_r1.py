@@ -160,10 +160,18 @@ class OllamaR1Client(BaseClient):
             if content_type == "reasoning":
                 yield content_type, content
     def _get_proxy_config(self) -> tuple[bool, str | None]:
-        """获取代理配置"""
-        proxy = os.getenv("OLLAMA_PROXY")
-        if proxy:
-            logger.info(f"Ollama 客户端使用代理: {proxy}")
-        else:
-            logger.debug("Ollama 客户端未启用代理")
-        return bool(proxy), proxy
+        """获取 Ollama 客户端的代理配置"""
+        enable_proxy = os.getenv('OLLAMA_ENABLE_PROXY', 'false').lower() == 'true'
+        if enable_proxy:
+            http_proxy = os.getenv('HTTP_PROXY')
+            https_proxy = os.getenv('HTTPS_PROXY')
+            
+            if https_proxy or http_proxy:
+                logger.info(f"Ollama 客户端使用代理: {https_proxy or http_proxy}")
+            else:
+                logger.warning("已启用 Ollama 代理但未设置代理地址")
+            
+            return True, https_proxy or http_proxy
+        
+        logger.debug("Ollama 客户端未启用代理")
+        return False, None

@@ -130,65 +130,87 @@ class DeepClaude:
             logger.error(f"处理流式响应时发生错误: {e}", exc_info=True)
             raise
 
-    async def chat_completions_with_stream(self, messages: list, model_arg: tuple = None, **kwargs):
-        """流式对话完成"""
+    async def _handle_api_error(self, e: Exception) -> str:
+        """处理 API 错误"""
+        if isinstance(e, aiohttp.ClientError):
+            return "网络连接错误，请检查网络连接"
+        elif isinstance(e, asyncio.TimeoutError):
+            return "请求超时，请稍后重试"
+        elif isinstance(e, ValueError):
+            return f"参数错误: {str(e)}"
+        else:
+            return f"未知错误: {str(e)}"
+
+    async def chat_completions_with_stream(self, messages: list, **kwargs):
         try:
-            # 思考过程输出
-            reasoning_content = []
+            logger.info("开始流式处理请求...")
+            
+            # 获取思考者实例
             provider = self._get_reasoning_provider()
-            provider_type = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
             
-            # 强制使用正确的模型
-            if provider_type == 'ollama':
-                model = "deepseek-r1:32b"  # Ollama 只支持这个模型
-                provider_kwargs = {}
-                logger.info(f"使用 Ollama 模型: {model}")
-            else:
-                model = kwargs.get('deepseek_model', 'deepseek-ai/DeepSeek-R1')
-                provider_kwargs = {'model_arg': model_arg} if model_arg else {}
-                logger.info(f"使用 DeepSeek 模型: {model}")
+            # 用于收集思考内容
+            reasoning_content = []
             
-            # 思考过程输出
-            yield self._format_stream_response("🤔 思考过程:\n", **kwargs)
+            # 1. 思考阶段 - 直接转发 token 并收集内容
+            async for content_type, content in provider.get_reasoning(
+                messages=messages,
+                **self._prepare_thinker_kwargs(kwargs)
+            ):
+                if content_type == "reasoning":
+                    # 保存思考内容
+                    reasoning_content.append(content)
+                    # 直接转发原始 token
+                    yield self._format_stream_response(content, **kwargs)
             
-            try:
-                async for content_type, content in provider.get_reasoning(
-                    messages=messages,
-                    model=model,  # 确保传递正确的模型名称
-                    **provider_kwargs
-                ):
-                    if content_type == "reasoning":
-                        # 输出思考内容
-                        yield self._format_stream_response(content, **kwargs)
-                        reasoning_content.append(content)
-                    elif content_type == "content":
-                        # 普通内容也记录
-                        reasoning_content.append(content)
-                
-                # 分隔符输出
-                yield self._format_stream_response("\n\n---\n最终答案：\n\n", **kwargs)
-                
-                # Claude回答输出
-                prompt = self._format_claude_prompt(messages[-1]['content'], "\n".join(reasoning_content))
-                claude_messages = [{"role": "user", "content": prompt}]
-                
-                async for content_type, content in self.claude_client.stream_chat(
-                    messages=claude_messages,
-                    model=kwargs.get('claude_model', 'claude-3-5-sonnet-20241022'),
-                    max_tokens=8192,
-                    temperature=0.7,
-                    top_p=0.9
-                ):
-                    if content_type == "answer":
-                        yield self._format_stream_response(content, **kwargs)
-                
-            except Exception as e:
-                logger.error(f"获取回答失败: {e}")
-                yield self._format_stream_response("❌ 获取回答失败，请稍后重试", **kwargs)
+            # 确保思考内容不为空
+            if not reasoning_content:
+                logger.warning("未获取到思考内容，使用原始问题")
+                reasoning_content = [messages[-1]["content"]]
             
+            # 2. 回答阶段 - 直接转发 token
+            prompt = self._format_claude_prompt(
+                messages[-1]['content'],
+                "\n".join(reasoning_content)  # 使用收集的完整思考内容
+            )
+            
+            async for chunk in self.claude_client.stream_chat(
+                messages=[{"role": "user", "content": prompt}],
+                **self._prepare_answerer_kwargs(kwargs)
+            ):
+                if chunk and "content" in chunk.get("delta", {}):
+                    # 直接转发原始 token
+                    yield self._format_stream_response(
+                        chunk["delta"]["content"],
+                        **kwargs
+                    )
+                
         except Exception as e:
-            logger.error(f"处理请求时发生错误: {e}")
-            yield self._format_stream_response("❌ 服务出现错误，请稍后重试", **kwargs)
+            error_msg = await self._handle_api_error(e)
+            logger.error(f"流式处理错误: {error_msg}", exc_info=True)
+            yield self._format_stream_response(f"错误: {error_msg}", **kwargs)
+
+    def _prepare_thinker_kwargs(self, kwargs: dict) -> dict:
+        """准备思考者参数"""
+        provider_type = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
+        
+        if provider_type == 'ollama':
+            model = "deepseek-r1:32b"
+        else:
+            model = kwargs.get('model', 'deepseek-ai/DeepSeek-R1')
+            
+        return {
+            'model': model,
+            'temperature': kwargs.get('temperature', 0.7),
+            'top_p': kwargs.get('top_p', 0.9)
+        }
+        
+    def _prepare_answerer_kwargs(self, kwargs: dict) -> dict:
+        """准备回答者参数"""
+        return {
+            'model': 'claude-3-5-sonnet-20241022',
+            'temperature': kwargs.get('temperature', 0.7),
+            'top_p': kwargs.get('top_p', 0.9)
+        }
 
     def _chunk_content(self, content: str, chunk_size: int = 3) -> list[str]:
         """将内容分割成小块以实现更细粒度的流式输出
@@ -412,22 +434,55 @@ class DeepClaude:
 
     def _format_stream_response(self, content: str, **kwargs) -> bytes:
         """格式化流式响应"""
-        if not content:
-            return b""
-        
         response = {
-            "id": kwargs.get('chat_id', 'chatcmpl-default'),
+            "id": kwargs.get("chat_id", f"chatcmpl-{int(time.time())}"),
             "object": "chat.completion.chunk",
-            "created": kwargs.get('created_time', int(time.time())),
-            "model": kwargs.get('model', 'deepclaude'),
+            "created": kwargs.get("created_time", int(time.time())),
+            "model": kwargs.get("model", "deepclaude"),
             "choices": [{
                 "index": 0,
                 "delta": {
                     "content": content
-                },
-                "finish_reason": None
+                }
             }]
         }
         
-        # 确保每个chunk都以data:开头，并以两个换行符结束
         return f"data: {json.dumps(response)}\n\n".encode('utf-8')
+
+    def _validate_kwargs(self, kwargs: dict) -> None:
+        """验证参数的有效性"""
+        # 验证温度参数
+        temperature = kwargs.get('temperature')
+        if temperature is not None:
+            if not isinstance(temperature, (int, float)) or temperature < 0 or temperature > 1:
+                raise ValueError("temperature 必须在 0 到 1 之间")
+            
+        # 验证 top_p 参数
+        top_p = kwargs.get('top_p')
+        if top_p is not None:
+            if not isinstance(top_p, (int, float)) or top_p < 0 or top_p > 1:
+                raise ValueError("top_p 必须在 0 到 1 之间")
+            
+        # 验证模型参数
+        model = kwargs.get('model')
+        if model and not isinstance(model, str):
+            raise ValueError("model 必须是字符串类型")
+
+    def _split_into_tokens(self, text: str) -> list[str]:
+        """将文本分割成更小的token
+        
+        Args:
+            text: 要分割的文本
+            
+        Returns:
+            list[str]: token列表
+        """
+        # 可以根据需要调整分割粒度
+        # 1. 按字符分割
+        return list(text)
+        
+        # 或者按词分割
+        # return text.split()
+        
+        # 或者使用更复杂的分词算法
+        # return some_tokenizer(text)

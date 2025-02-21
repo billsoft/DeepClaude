@@ -67,80 +67,88 @@ class ClaudeClient(BaseClient):
         logger.debug("Claude 客户端未启用代理")
         return False, None
 
-    async def stream_chat(self, messages: list, **kwargs):
-        """流式对话"""
+    def _prepare_headers(self) -> dict:
+        """准备请求头
+        
+        根据不同的 provider 准备对应的请求头
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        
         if self.provider == "anthropic":
-            # 根据Web搜索，使用正确的API版本和认证头
-            headers = {
+            headers.update({
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
                 "anthropic-beta": "messages-2023-12-15"
-            }
+            })
+        elif self.provider == "openrouter":
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        elif self.provider == "oneapi":
+            headers["Authorization"] = f"Bearer {self.api_key}"
             
-            # 构造标准消息格式
-            formatted_messages = []
-            for msg in messages:
-                if msg["role"] == "user":
-                    formatted_messages.append({
-                        "role": "user",
-                        "content": msg["content"]
-                    })
-                elif msg["role"] == "assistant":
-                    formatted_messages.append({
-                        "role": "assistant",
-                        "content": msg["content"]
-                    })
+        return headers
 
-            data = {
-                "model": kwargs.get('model', 'claude-3-5-sonnet-20241022'),
-                "messages": formatted_messages,
-                "max_tokens": kwargs.get('max_tokens', 8192),
-                "temperature": kwargs.get('temperature', 0.7),
-                "top_p": kwargs.get('top_p', 0.9),
-                "stream": True
-            }
+    def _prepare_request_data(self, messages: list, **kwargs) -> dict:
+        """准备请求数据
+        
+        Args:
+            messages: 消息列表
+            **kwargs: 其他参数
+        """
+        data = {
+            "model": kwargs.get("model", "claude-3-5-sonnet-20241022"),
+            "messages": messages,
+            "max_tokens": kwargs.get("max_tokens", 8192),
+            "temperature": kwargs.get("temperature", 0.7),
+            "top_p": kwargs.get("top_p", 0.9),
+            "stream": True
+        }
+        
+        # 记录请求数据
+        logger.debug(f"Claude请求数据: {messages}")
+        
+        return data
 
+    async def stream_chat(self, messages: list, **kwargs) -> AsyncGenerator[dict, None]:
+        """流式对话"""
+        try:
+            headers = self._prepare_headers()
+            data = self._prepare_request_data(messages, **kwargs)
+            
             logger.debug(f"Claude请求数据: {data}")
             
-            try:
-                async for chunk in self._make_request(headers, data):
-                    chunk_str = chunk.decode('utf-8')
-                    if not chunk_str.strip():
-                        continue
-
-                    for line in chunk_str.split('\n'):
-                        if line.startswith('data: '):
-                            json_str = line[6:]
-                            if json_str.strip() == '[DONE]':
-                                return
-
-                            try:
-                                response = json.loads(json_str)
-                                if response.get('type') == 'content_block_delta':
-                                    content = response.get('delta', {}).get('text', '')
+            async for chunk in self._make_request(headers, data):
+                try:
+                    if chunk:
+                        # 解析 SSE 数据
+                        text = chunk.decode('utf-8')
+                        if text.startswith('data: '):
+                            data = text[6:].strip()
+                            if data == '[DONE]':
+                                break
+                                
+                            response = json.loads(data)
+                            logger.debug(f"Claude响应数据: {response}")
+                            
+                            # 检查响应结构
+                            if 'type' in response:  # Claude API 格式
+                                if response['type'] == 'content_block_delta':
+                                    content = response['delta'].get('text', '')
                                     if content:
-                                        # 立即yield每个内容片段
-                                        yield "answer", content
-                            except json.JSONDecodeError:
-                                continue
-            except Exception as e:
-                logger.error(f"Claude请求失败: {e}")
-                raise
-        elif self.provider == "openrouter":
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/ErlichLiu/DeepClaude",
-                "X-Title": "DeepClaude"
-            }
-        elif self.provider == "oneapi":
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-        else:
-            raise ValueError(f"不支持的Claude Provider: {self.provider}")
+                                        yield {"delta": {"content": content}}
+                            elif 'choices' in response:  # OpenAI 格式
+                                if response['choices'][0].get('delta', {}).get('content'):
+                                    yield response['choices'][0]
+                                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"解析Claude响应失败: {e}")
+                    continue
+                
+        except Exception as e:
+            logger.error(f"Claude流式请求失败: {e}", exc_info=True)
+            raise
 
     async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
         """Claude 不提供推理过程
