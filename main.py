@@ -10,7 +10,7 @@ def main():
     """主函数，启动FastAPI应用"""
     # 从环境变量获取配置，如果没有则使用默认值
     host = os.getenv('HOST', '::')
-    port = int(os.getenv('PORT', 1124))
+    port = int(os.getenv('PORT', 2411))
     reload = os.getenv('RELOAD', 'false').lower() == 'true'
 
     # 启动配置

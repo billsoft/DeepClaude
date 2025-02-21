@@ -3,7 +3,6 @@
 .
 ├── Dockerfile
 ├── main.py
-├── setup.py
 ├── .cursor/
 │   ├── rules/
 ├── .github/
@@ -76,23 +75,6 @@ def main():
  )
 if __name__ == '__main__':
  main()```
-______________________________
-
-## .\setup.py
-```python
-from setuptools import setup, find_packages
-setup(
- name="deepclaude",
- version="0.1",
- packages=find_packages(),
- install_requires=[
- "fastapi",
- "uvicorn",
- "python-dotenv",
- "aiohttp",
- "colorlog"
- ]
-)```
 ______________________________
 
 ## ...\app\main.py
@@ -391,7 +373,7 @@ class ClaudeClient(BaseClient):
  if data == '[DONE]':
  break
  response = json.loads(data)
- logger.debug(f"Claude响应数据: {response}")
+ logger.debug(f"Claude响应: {str(response)[:50]}...")
  if 'type' in response:
  if response['type'] == 'content_block_delta':
  content = response['delta'].get('text', '')
@@ -779,15 +761,20 @@ class DeepClaude:
  try:
  logger.info("开始流式处理请求...")
  provider = self._get_reasoning_provider()
+ reasoning_content = []
  async for content_type, content in provider.get_reasoning(
  messages=messages,
  **self._prepare_thinker_kwargs(kwargs)
  ):
  if content_type == "reasoning":
+ reasoning_content.append(content)
  yield self._format_stream_response(content, **kwargs)
+ if not reasoning_content:
+ logger.warning("未获取到思考内容，使用原始问题")
+ reasoning_content = [messages[-1]["content"]]
  prompt = self._format_claude_prompt(
  messages[-1]['content'],
- reasoning_content
+ "\n".join(reasoning_content)
  )
  async for chunk in self.claude_client.stream_chat(
  messages=[{"role": "user", "content": prompt}],
