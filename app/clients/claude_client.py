@@ -120,6 +120,7 @@ class ClaudeClient(BaseClient):
                                 if response.get('type') == 'content_block_delta':
                                     content = response.get('delta', {}).get('text', '')
                                     if content:
+                                        # 立即yield每个内容片段
                                         yield "answer", content
                             except json.JSONDecodeError:
                                 continue

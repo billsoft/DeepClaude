@@ -133,62 +133,74 @@ class DeepClaude:
     async def chat_completions_with_stream(self, messages: list, model_arg: tuple = None, **kwargs):
         """流式对话完成"""
         try:
-            # 1. 获取思考过程
+            # 思考过程输出
             reasoning_content = []
             provider = self._get_reasoning_provider()
-            
-            # 根据提供者类型选择正确的模型和参数
             provider_type = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
-            if provider_type == 'ollama':
-                model = "deepseek-r1:32b"
-                provider_kwargs = {}
-            else:
-                model = os.getenv('DEEPSEEK_MODEL', 'deepseek-reasoner')
-                provider_kwargs = {'model_arg': model_arg} if model_arg else {}
             
-            # 先输出思考标题
+            # 强制使用正确的模型
+            if provider_type == 'ollama':
+                model = "deepseek-r1:32b"  # Ollama 只支持这个模型
+                provider_kwargs = {}
+                logger.info(f"使用 Ollama 模型: {model}")
+            else:
+                model = kwargs.get('deepseek_model', 'deepseek-ai/DeepSeek-R1')
+                provider_kwargs = {'model_arg': model_arg} if model_arg else {}
+                logger.info(f"使用 DeepSeek 模型: {model}")
+            
+            # 思考过程输出
             yield self._format_stream_response("🤔 思考过程:\n", **kwargs)
             
             try:
                 async for content_type, content in provider.get_reasoning(
                     messages=messages,
-                    model=model,
+                    model=model,  # 确保传递正确的模型名称
                     **provider_kwargs
                 ):
                     if content_type == "reasoning":
-                        reasoning_content.append(content)
-                        # 直接输出思考内容，不带标题
+                        # 输出思考内容
                         yield self._format_stream_response(content, **kwargs)
-            except Exception as e:
-                logger.error(f"获取思考过程失败: {e}")
-            
-            # 2. 构造给 Claude 的输入
-            reasoning = "\n".join(reasoning_content) if reasoning_content else "无法获取思考过程"
-            
-            # 3. 使用 Claude 生成最终答案
-            try:
-                prompt = self._format_claude_prompt(messages[-1]['content'], reasoning)
-                claude_messages = [{"role": "user", "content": prompt}]
+                        reasoning_content.append(content)
+                    elif content_type == "content":
+                        # 普通内容也记录
+                        reasoning_content.append(content)
                 
-                # 先输出回答标题
+                # 分隔符输出
                 yield self._format_stream_response("\n\n---\n最终答案：\n\n", **kwargs)
+                
+                # Claude回答输出
+                prompt = self._format_claude_prompt(messages[-1]['content'], "\n".join(reasoning_content))
+                claude_messages = [{"role": "user", "content": prompt}]
                 
                 async for content_type, content in self.claude_client.stream_chat(
                     messages=claude_messages,
-                    model=os.getenv('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022'),
+                    model=kwargs.get('claude_model', 'claude-3-5-sonnet-20241022'),
                     max_tokens=8192,
                     temperature=0.7,
                     top_p=0.9
                 ):
                     if content_type == "answer":
-                        # 直接输出回答内容，不带标题
                         yield self._format_stream_response(content, **kwargs)
+                
             except Exception as e:
-                logger.error(f"获取Claude回答失败: {e}")
-                yield self._format_stream_response("❌ 获取最终答案失败，请稍后重试", **kwargs)
+                logger.error(f"获取回答失败: {e}")
+                yield self._format_stream_response("❌ 获取回答失败，请稍后重试", **kwargs)
+            
         except Exception as e:
             logger.error(f"处理请求时发生错误: {e}")
             yield self._format_stream_response("❌ 服务出现错误，请稍后重试", **kwargs)
+
+    def _chunk_content(self, content: str, chunk_size: int = 3) -> list[str]:
+        """将内容分割成小块以实现更细粒度的流式输出
+        
+        Args:
+            content: 要分割的内容
+            chunk_size: 每个块的大小，默认为3个字符
+            
+        Returns:
+            list[str]: 分割后的内容块列表
+        """
+        return [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
 
     def _format_claude_prompt(self, original_question: str, reasoning: str) -> str:
         """格式化给Claude的提示词"""
@@ -399,8 +411,8 @@ class DeepClaude:
                 raise ValueError("使用 Ollama 时必须提供 API URL")
 
     def _format_stream_response(self, content: str, **kwargs) -> bytes:
-        """格式化流式响应为 OpenAI 格式"""
-        if not content:  # 防止空内容
+        """格式化流式响应"""
+        if not content:
             return b""
         
         response = {
@@ -411,10 +423,11 @@ class DeepClaude:
             "choices": [{
                 "index": 0,
                 "delta": {
-                    "role": "assistant",
                     "content": content
                 },
                 "finish_reason": None
             }]
         }
+        
+        # 确保每个chunk都以data:开头，并以两个换行符结束
         return f"data: {json.dumps(response)}\n\n".encode('utf-8')

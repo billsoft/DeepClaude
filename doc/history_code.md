@@ -198,8 +198,13 @@ async def chat_completions(request: Request):
  media_type="text/event-stream",
  headers={
  "X-Accel-Buffering": "no",
- "Cache-Control": "no-cache",
+ "Cache-Control": "no-cache, no-transform",
  "Connection": "keep-alive",
+ "Content-Type": "text/event-stream;charset=utf-8",
+ "Transfer-Encoding": "chunked",
+ "Access-Control-Allow-Origin": "*",
+ "Access-Control-Allow-Methods": "POST, OPTIONS",
+ "Access-Control-Allow-Headers": "*"
  }
  )
  except ValueError as e:
@@ -617,6 +622,7 @@ class OllamaR1Client(BaseClient):
  logger.debug(f"开始流式对话：{data}")
  try:
  current_content = ""
+ last_content = ""
  async for chunk in self._make_request(headers, data):
  chunk_str = chunk.decode('utf-8')
  if not chunk_str.strip():
@@ -625,12 +631,24 @@ class OllamaR1Client(BaseClient):
  response = json.loads(chunk_str)
  if "message" in response and "content" in response["message"]:
  content = response["message"]["content"]
- current_content += content
- has_reasoning, reasoning = self._extract_reasoning(current_content)
+ if content == last_content:
+ continue
+ last_content = content
+ has_think_start = "<think>" in content
+ has_think_end = "</think>" in content
+ if has_think_start and not has_think_end:
+ current_content = content
+ continue
+ elif has_think_end and current_content:
+ full_content = current_content + content
+ has_reasoning, reasoning = self._extract_reasoning(full_content)
  if has_reasoning:
  yield "reasoning", reasoning
- current_content = current_content[current_content.find("</think>") + 8:]
+ current_content = ""
+ elif not has_think_start and not has_think_end:
+ yield "content", content
  if response.get("done"):
+ if current_content:
  has_reasoning, reasoning = self._extract_reasoning(current_content)
  if has_reasoning:
  yield "reasoning", reasoning
@@ -745,15 +763,18 @@ class DeepClaude:
  raise
  async def chat_completions_with_stream(self, messages: list, model_arg: tuple = None, **kwargs):
  try:
+ yield self._format_stream_response("", **kwargs)
  reasoning_content = []
  provider = self._get_reasoning_provider()
  provider_type = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
  if provider_type == 'ollama':
  model = "deepseek-r1:32b"
  provider_kwargs = {}
+ logger.info(f"使用 Ollama 模型: {model}")
  else:
- model = os.getenv('DEEPSEEK_MODEL', 'deepseek-reasoner')
+ model = kwargs.get('deepseek_model', 'deepseek-ai/DeepSeek-R1')
  provider_kwargs = {'model_arg': model_arg} if model_arg else {}
+ logger.info(f"使用 DeepSeek 模型: {model}")
  yield self._format_stream_response("🤔 思考过程:\n", **kwargs)
  try:
  async for content_type, content in provider.get_reasoning(
@@ -762,30 +783,38 @@ class DeepClaude:
  **provider_kwargs
  ):
  if content_type == "reasoning":
+ if content and content.strip():
+ for chunk in self._chunk_content(content, chunk_size=3):
+ yield self._format_stream_response(chunk, **kwargs)
+ await asyncio.sleep(0.01)
  reasoning_content.append(content)
- yield self._format_stream_response(content, **kwargs)
- except Exception as e:
- logger.error(f"获取思考过程失败: {e}")
- reasoning = "\n".join(reasoning_content) if reasoning_content else "无法获取思考过程"
- try:
- prompt = self._format_claude_prompt(messages[-1]['content'], reasoning)
- claude_messages = [{"role": "user", "content": prompt}]
+ if reasoning_content:
  yield self._format_stream_response("\n\n---\n最终答案：\n\n", **kwargs)
+ prompt = self._format_claude_prompt(messages[-1]['content'], "\n".join(reasoning_content))
+ claude_messages = [{"role": "user", "content": prompt}]
  async for content_type, content in self.claude_client.stream_chat(
  messages=claude_messages,
- model=os.getenv('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022'),
+ model=kwargs.get('claude_model', 'claude-3-5-sonnet-20241022'),
  max_tokens=8192,
  temperature=0.7,
  top_p=0.9
  ):
  if content_type == "answer":
- yield self._format_stream_response(content, **kwargs)
+ for chunk in self._chunk_content(content, chunk_size=3):
+ yield self._format_stream_response(chunk, **kwargs)
+ await asyncio.sleep(0.01)
+ else:
+ logger.warning("没有获取到有效的思考内容")
+ yield self._format_stream_response("❌ 无法获取有效的思考内容", **kwargs)
  except Exception as e:
- logger.error(f"获取Claude回答失败: {e}")
- yield self._format_stream_response("❌ 获取最终答案失败，请稍后重试", **kwargs)
+ logger.error(f"获取回答失败: {e}")
+ yield self._format_stream_response("❌ 获取回答失败，请稍后重试", **kwargs)
+ yield self._format_stream_response("[DONE]", **kwargs)
  except Exception as e:
  logger.error(f"处理请求时发生错误: {e}")
  yield self._format_stream_response("❌ 服务出现错误，请稍后重试", **kwargs)
+ def _chunk_content(self, content: str, chunk_size: int = 3) -> list[str]:
+ return [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
  def _format_claude_prompt(self, original_question: str, reasoning: str) -> str:
  return f
  async def chat_completions_without_stream(
@@ -932,7 +961,6 @@ class DeepClaude:
  "choices": [{
  "index": 0,
  "delta": {
- "role": "assistant",
  "content": content
  },
  "finish_reason": None

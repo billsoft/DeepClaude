@@ -70,18 +70,17 @@ class OllamaR1Client(BaseClient):
         return False, ""
 
     async def stream_chat(self, messages: list, model: str = "deepseek-r1:32b") -> AsyncGenerator[tuple[str, str], None]:
-        # 添加参数验证
+        """流式对话"""
         if not messages:
             raise ValueError("消息列表不能为空")
-            
+        
         headers = {
             "Content-Type": "application/json",
         }
         
-        # Ollama API格式转换
         data = {
-            "model": model,
-            "messages": messages,  # 使用完整的消息历史
+            "model": model,  # 确保使用传入的模型名称
+            "messages": messages,
             "stream": True,
             "options": {
                 "temperature": 0.7,
@@ -102,22 +101,36 @@ class OllamaR1Client(BaseClient):
                     response = json.loads(chunk_str)
                     if "message" in response and "content" in response["message"]:
                         content = response["message"]["content"]
-                        current_content += content
                         
-                        # 使用 _extract_reasoning 提取推理内容
-                        has_reasoning, reasoning = self._extract_reasoning(current_content)
-                        if has_reasoning:
-                            yield "reasoning", reasoning
-                            # 清理已处理的内容
-                            current_content = current_content[current_content.find("</think>") + 8:]
+                        # 处理思考标签
+                        has_think_start = "<think>" in content
+                        has_think_end = "</think>" in content
+                        
+                        if has_think_start and not has_think_end:
+                            # 开始收集思考内容
+                            current_content = content
+                        elif has_think_end and current_content:
+                            # 完整的思考内容
+                            full_content = current_content + content
+                            has_reasoning, reasoning = self._extract_reasoning(full_content)
+                            if has_reasoning:
+                                yield "reasoning", reasoning
+                            current_content = ""
+                        elif current_content:
+                            # 继续收集思考内容
+                            current_content += content
+                        else:
+                            # 普通内容，直接输出
+                            yield "content", content
+                        
+                        if response.get("done"):
+                            # 最后一次检查思考内容
+                            if current_content:
+                                has_reasoning, reasoning = self._extract_reasoning(current_content)
+                                if has_reasoning:
+                                    yield "reasoning", reasoning
+                            return
                             
-                    if response.get("done"):
-                        # 最后检查一次
-                        has_reasoning, reasoning = self._extract_reasoning(current_content)
-                        if has_reasoning:
-                            yield "reasoning", reasoning
-                        return
-                        
                 except json.JSONDecodeError:
                     continue
                 

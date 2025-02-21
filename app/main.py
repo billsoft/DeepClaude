@@ -250,9 +250,14 @@ async def chat_completions(request: Request):
                     stream_response,
                     media_type="text/event-stream",
                     headers={
-                        "X-Accel-Buffering": "no",
-                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",  # 禁用nginx缓冲
+                        "Cache-Control": "no-cache, no-transform",  # 禁用缓存
                         "Connection": "keep-alive",
+                        "Content-Type": "text/event-stream;charset=utf-8",
+                        "Transfer-Encoding": "chunked",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "POST, OPTIONS",
+                        "Access-Control-Allow-Headers": "*"
                     }
                 )
             except ValueError as e:
