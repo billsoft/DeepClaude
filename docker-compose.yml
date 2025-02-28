@@ -1,41 +1,24 @@
 services:
   # 服务名称
   deepclaude:
-    # 使用本地Dockerfile构建镜像，而不是使用预构建镜像
+    # 使用本地Dockerfile构建镜像
     build: .
     
-    # 端口映射配置
-    # 将容器内的8211端口映射到主机的8211端口
+    # 端口映射配置 - 与.env中PORT一致
     ports:
-      - "8211:8211"
+      - "1124:1124"
     
-    # 环境变量配置
-    # 使用您当前.env中的实际配置
+    # 环境变量配置 - 使用.env文件
+    env_file:
+      - .env
+    
+    # 额外的必要环境变量
     environment:
-      # API访问密钥
-      - ALLOW_API_KEY=<your-allow-api-key>
-      
-      # 跨域配置，允许所有域名访问
-      - ALLOW_ORIGINS=*
-      
-      # DeepSeek配置
-      # 使用官方API配置
-      - DEEPSEEK_API_KEY=<your-deepseek-api-key>
-      - DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions
-      - DEEPSEEK_MODEL=deepseek-reasoner
-      # 使用Origin_Reasoning格式
-      - IS_ORIGIN_REASONING=true
-      
-      # Claude配置
-      # 使用官方API配置
-      - CLAUDE_API_KEY=<your-claude-api-key>
-      - CLAUDE_MODEL=claude-3-5-sonnet-20241022
-      - CLAUDE_PROVIDER=anthropic
-      - CLAUDE_API_URL=https://api.anthropic.com/v1/messages
-      
-      # 日志级别设置为INFO
-      - LOG_LEVEL=INFO
+      - HOST=0.0.0.0
     
     # 容器重启策略
-    # always表示容器退出时总是重启
     restart: always
+    
+    # 卷挂载，保存持久化数据
+    volumes:
+      - ./:/app
