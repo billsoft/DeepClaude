@@ -30,6 +30,7 @@
 │   ├── test_deepseek_client.py
 │   ├── test_nvidia_deepseek.py
 │   ├── test_ollama_r1.py
+│   ├── test_siliconflow_deepseek.py
 ```
 
 # Web服务器层
@@ -379,10 +380,10 @@ class ClaudeClient(BaseClient):
  if response['type'] == 'content_block_delta':
  content = response['delta'].get('text', '')
  if content:
- yield {"delta": {"content": content}}
+ yield "content", content
  elif 'choices' in response:
  if response['choices'][0].get('delta', {}).get('content'):
- yield response['choices'][0]
+ yield "content", response['choices'][0].get('delta', {}).get('content')
  except json.JSONDecodeError as e:
  logger.error(f"解析Claude响应失败: {e}")
  continue
@@ -390,8 +391,16 @@ class ClaudeClient(BaseClient):
  logger.error(f"Claude流式请求失败: {e}", exc_info=True)
  raise
  async def get_reasoning(self, messages: list, model: str, **kwargs) -> AsyncGenerator[tuple[str, str], None]:
+ if kwargs.get('stream', True) == False:
+ async for content_type, content in self.stream_chat(
+ messages=messages,
+ model=kwargs.get('model', 'claude-3-5-sonnet-20241022'),
+ **kwargs
+ ):
+ all_content = content
+ yield "answer", all_content
  return
- yield```
+ return```
 ______________________________
 
 ## ...\clients\deepseek_client.py
@@ -965,6 +974,11 @@ class DeepClaude:
  is_first_reasoning = False
  for retry_count, reasoning_mode in enumerate(self.reasoning_modes):
  if reasoning_success:
+ logger.info("推理成功，退出模式重试循环")
+ break
+ if thought_complete and len("".join(reasoning_content)) > self.min_reasoning_chars:
+ logger.info("思考阶段已完成，退出所有重试")
+ reasoning_success = True
  break
  if retry_count > 0:
  logger.info(f"尝试使用不同的推理模式: {reasoning_mode} (尝试 {retry_count+1}/{len(self.reasoning_modes)})")
@@ -1005,6 +1019,10 @@ class DeepClaude:
  is_first_thought=False,
  **kwargs
  )
+ if len("".join(reasoning_content)) > self.min_reasoning_chars or reasoning_mode in ['early_content', 'any_content']:
+ logger.info("收到常规内容且已收集足够推理内容，终止推理过程")
+ reasoning_success = True
+ break
  except Exception as reasoning_e:
  logger.error(f"使用模式 {reasoning_mode} 获取推理内容时发生错误: {reasoning_e}")
  yield self._format_stream_response(
@@ -1054,12 +1072,11 @@ class DeepClaude:
  logger.debug(f"发送给Claude的提示词: {prompt[:500]}...")
  try:
  answer_begun = False
- async for chunk in self.claude_client.stream_chat(
+ async for content_type, content in self.claude_client.stream_chat(
  messages=[{"role": "user", "content": prompt}],
  **self._prepare_answerer_kwargs(kwargs)
  ):
- if chunk and "content" in chunk.get("delta", {}):
- content = chunk["delta"]["content"]
+ if content_type == "content" and content:
  if not answer_begun and content.strip():
  answer_begun = True
  yield self._format_stream_response(
@@ -1150,16 +1167,18 @@ class DeepClaude:
  claude_messages = [{"role": "user", "content": combined_content}]
  logger.info("正在获取 Claude 回答...")
  try:
+ full_content = ""
  async for content_type, content in self.claude_client.stream_chat(
  messages=claude_messages,
  model_arg=model_arg,
  model=claude_model,
  stream=False
  ):
- if content_type == "answer":
+ if content_type in ["answer", "content"]:
  logger.debug(f"获取到 Claude 回答: {content}")
+ full_content += content
  return {
- "content": content,
+ "content": full_content,
  "role": "assistant"
  }
  except Exception as e:
@@ -1169,6 +1188,8 @@ class DeepClaude:
  try:
  provider = self._get_reasoning_provider()
  reasoning_content = []
+ content_received = False
+ logger.info(f"开始获取思考内容，模型: {model}, 推理模式: {os.getenv('DEEPSEEK_REASONING_MODE', 'auto')}")
  async for content_type, content in provider.get_reasoning(
  messages=messages,
  model=model,
@@ -1176,10 +1197,18 @@ class DeepClaude:
  ):
  if content_type == "reasoning":
  reasoning_content.append(content)
+ logger.debug(f"收到推理内容，当前长度: {len(''.join(reasoning_content))}")
  elif content_type == "content" and not reasoning_content:
  logger.info("未收集到推理内容，将普通内容视为推理")
  reasoning_content.append(f"分析: {content}")
+ logger.debug(f"普通内容转为推理内容，当前长度: {len(''.join(reasoning_content))}")
+ elif content_type == "content":
+ content_received = True
+ logger.info("收到普通内容，推理阶段可能已结束")
  result = "\n".join(reasoning_content)
+ if content_received and len(result) > self.min_reasoning_chars:
+ logger.info(f"已收到普通内容且推理内容长度足够 ({len(result)}字符)，结束获取推理")
+ return result
  if not result or len(result) < self.min_reasoning_chars:
  current_mode = os.getenv('DEEPSEEK_REASONING_MODE', 'auto')
  logger.warning(f"使用模式 {current_mode} 获取的推理内容不足，尝试切换模式")
@@ -1256,11 +1285,13 @@ class DeepClaude:
  reasoning_content = []
  for reasoning_mode in self.reasoning_modes:
  if reasoning_content and len("".join(reasoning_content)) > self.min_reasoning_chars:
+ logger.info(f"已收集到足够推理内容 ({len(''.join(reasoning_content))}字符)，不再尝试其他模式")
  break
  logger.info(f"尝试使用推理模式: {reasoning_mode}")
  os.environ["DEEPSEEK_REASONING_MODE"] = reasoning_mode
  provider = self._get_reasoning_provider()
  temp_content = []
+ content_received = False
  try:
  async for content_type, content in provider.get_reasoning(
  messages=messages,
@@ -1269,10 +1300,21 @@ class DeepClaude:
  ):
  if content_type == "reasoning":
  temp_content.append(content)
+ logger.debug(f"收到推理内容，当前临时内容长度: {len(''.join(temp_content))}")
  elif content_type == "content" and not temp_content and reasoning_mode in ['early_content', 'any_content']:
  temp_content.append(f"分析: {content}")
+ logger.debug(f"普通内容转为推理内容，当前临时内容长度: {len(''.join(temp_content))}")
+ elif content_type == "content":
+ content_received = True
+ logger.info("收到普通内容，推理阶段可能已结束")
+ if content_received and len("".join(temp_content)) > self.min_reasoning_chars:
+ logger.info("收到普通内容且临时推理内容足够，提前结束推理获取")
+ break
  if temp_content and len("".join(temp_content)) > len("".join(reasoning_content)):
  reasoning_content = temp_content
+ if content_received:
+ logger.info("推理阶段已结束且内容足够，停止尝试其他模式")
+ break
  except Exception as mode_e:
  logger.error(f"使用推理模式 {reasoning_mode} 时发生错误: {mode_e}")
  continue
@@ -1750,6 +1792,264 @@ async def test_ollama_connection():
  return False
 if __name__ == "__main__":
  asyncio.run(test_ollama_stream())```
+______________________________
+
+## ...\test\test_siliconflow_deepseek.py
+```python
+import os
+import sys
+import asyncio
+import json
+import argparse
+from dotenv import load_dotenv
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+from app.clients.deepseek_client import DeepSeekClient
+from app.utils.logger import logger
+load_dotenv()
+def parse_args():
+ default_api_key = os.getenv("DEEPSEEK_API_KEY")
+ default_api_url = os.getenv("DEEPSEEK_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
+ default_model = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1")
+ parser = argparse.ArgumentParser(description='测试硅基流动 DeepSeek R1 API')
+ parser.add_argument('--api-key', type=str,
+ default=default_api_key,
+ help=f'硅基流动API密钥 (默认: {default_api_key[:8]}*** 来自环境变量)' if default_api_key else '硅基流动API密钥')
+ parser.add_argument('--api-url', type=str,
+ default=default_api_url,
+ help=f'硅基流动API地址 (默认: {default_api_url})')
+ parser.add_argument('--model', type=str,
+ default=default_model,
+ help=f'硅基流动模型名称 (默认: {default_model})')
+ parser.add_argument('--question', type=str,
+ default='中国大模型行业2025年将会迎来哪些机遇和挑战？',
+ help='测试问题')
+ parser.add_argument('--debug', action='store_true',
+ help='启用调试模式')
+ args = parser.parse_args()
+ if not args.api_key:
+ logger.error("未提供API密钥！请在.env文件中设置DEEPSEEK_API_KEY或使用--api-key参数")
+ sys.exit(1)
+ return args
+async def test_siliconflow_reasoning(args):
+ logger.info("=== 硅基流动 DeepSeek-R1 API 测试开始 ===")
+ logger.info(f"API URL: {args.api_url}")
+ logger.info(f"API Key: {args.api_key[:8]}***")
+ logger.info(f"Model: {args.model}")
+ logger.info(f"测试问题: {args.question}")
+ messages = [
+ {"role": "user", "content": args.question}
+ ]
+ client = DeepSeekClient(
+ api_key=args.api_key,
+ api_url=args.api_url,
+ provider="siliconflow"
+ )
+ os.environ["DEEPSEEK_REASONING_MODE"] = "reasoning_field"
+ os.environ["IS_ORIGIN_REASONING"] = "true"
+ try:
+ logger.info("开始测试硅基流动 DeepSeek-R1 推理功能...")
+ logger.debug(f"发送消息: {messages}")
+ reasoning_buffer = []
+ content_buffer = []
+ reasoning_count = 0
+ content_count = 0
+ async for content_type, content in client.get_reasoning(
+ messages=messages,
+ model=args.model
+ ):
+ if content_type == "reasoning":
+ reasoning_count += 1
+ reasoning_buffer.append(content)
+ if len(''.join(reasoning_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.info(f"推理过程（{reasoning_count}）: {''.join(reasoning_buffer)}")
+ reasoning_buffer = []
+ elif content_type == "content":
+ content_count += 1
+ content_buffer.append(content)
+ if len(''.join(content_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.info(f"回答内容（{content_count}）: {''.join(content_buffer)}")
+ content_buffer = []
+ if reasoning_buffer:
+ logger.info(f"推理过程（最终）: {''.join(reasoning_buffer)}")
+ if content_buffer:
+ logger.info(f"回答内容（最终）: {''.join(content_buffer)}")
+ logger.info(f"测试完成 - 收到 {reasoning_count} 个推理片段，{content_count} 个回答内容片段")
+ if reasoning_count == 0:
+ logger.warning("未收到任何推理内容！请检查以下设置:")
+ logger.warning("1. 确保DEEPSEEK_REASONING_MODE设置为'reasoning_field'")
+ logger.warning("2. 确保IS_ORIGIN_REASONING设置为'true'")
+ logger.warning("3. 确保硅基流动API支持推理输出功能")
+ logger.info("=== 硅基流动 DeepSeek-R1 API 测试完成 ===")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+ logger.error(f"错误类型: {type(e)}")
+async def test_siliconflow_non_stream_api(args):
+ import aiohttp
+ logger.info("=== 硅基流动 DeepSeek-R1 非流式API测试开始 ===")
+ logger.info(f"测试问题: {args.question}")
+ payload = {
+ "model": args.model,
+ "messages": [
+ {
+ "role": "user",
+ "content": args.question
+ }
+ ],
+ "stream": False,
+ "max_tokens": 512,
+ "stop": None,
+ "temperature": 0.7,
+ "top_p": 0.7,
+ "top_k": 50,
+ "frequency_penalty": 0.5,
+ "n": 1,
+ "response_format": {"type": "text"}
+ }
+ headers = {
+ "Authorization": f"Bearer {args.api_key}",
+ "Content-Type": "application/json"
+ }
+ try:
+ async with aiohttp.ClientSession() as session:
+ async with session.post(args.api_url, json=payload, headers=headers) as response:
+ if response.status != 200:
+ error_text = await response.text()
+ logger.error(f"API调用失败: HTTP {response.status}\n{error_text}")
+ return
+ data = await response.json()
+ logger.debug(f"API响应: {json.dumps(data, ensure_ascii=False, indent=2)}")
+ if "choices" in data and len(data["choices"]) > 0:
+ reasoning = data["choices"][0].get("reasoning_content")
+ content = data["choices"][0].get("message", {}).get("content")
+ if reasoning:
+ logger.info(f"推理内容: {reasoning[:200]}...")
+ else:
+ logger.warning("响应中没有推理内容")
+ if content:
+ logger.info(f"回答内容: {content[:200]}...")
+ else:
+ logger.warning("响应中没有回答内容")
+ if "usage" in data:
+ logger.info(f"Token使用情况: {data['usage']}")
+ logger.info("=== 硅基流动 DeepSeek-R1 非流式API测试完成 ===")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+async def test_siliconflow_stream_api_direct(args):
+ import requests
+ logger.info("=== 硅基流动 DeepSeek-R1 流式API直接调用测试开始 ===")
+ logger.info(f"API URL: {args.api_url}")
+ logger.info(f"API Key: {args.api_key[:8]}***")
+ logger.info(f"Model: {args.model}")
+ logger.info(f"测试问题: {args.question}")
+ payload = {
+ "model": args.model,
+ "messages": [
+ {
+ "role": "user",
+ "content": args.question
+ }
+ ],
+ "stream": True,
+ "max_tokens": 512,
+ "stop": None,
+ "temperature": 0.7,
+ "top_p": 0.7,
+ "top_k": 50,
+ "frequency_penalty": 0.5,
+ "n": 1,
+ "response_format": {"type": "text"}
+ }
+ headers = {
+ "Authorization": f"Bearer {args.api_key}",
+ "Content-Type": "application/json"
+ }
+ try:
+ logger.info("发送流式API请求...")
+ response = requests.post(args.api_url, json=payload, headers=headers, stream=True)
+ if response.status_code != 200:
+ logger.error(f"API调用失败: HTTP {response.status_code}\n{response.text}")
+ return
+ reasoning_buffer = []
+ content_buffer = []
+ reasoning_count = 0
+ content_count = 0
+ logger.info("开始接收流式响应...")
+ for line in response.iter_lines():
+ if not line:
+ continue
+ if line.startswith(b"data: "):
+ data_str = line[6:].decode("utf-8")
+ if data_str == "[DONE]":
+ logger.info("收到流式响应结束标记")
+ break
+ try:
+ data = json.loads(data_str)
+ logger.debug(f"收到数据: {json.dumps(data, ensure_ascii=False)}")
+ if "choices" in data and len(data["choices"]) > 0:
+ reasoning = data["choices"][0].get("reasoning_content")
+ delta = data["choices"][0].get("delta", {})
+ content = delta.get("content", "")
+ if reasoning:
+ reasoning_count += 1
+ reasoning_buffer.append(reasoning)
+ if len(''.join(reasoning_buffer)) >= 50 or any(p in reasoning for p in '。，！？.!?'):
+ logger.info(f"推理过程（{reasoning_count}）: {''.join(reasoning_buffer)}")
+ reasoning_buffer = []
+ if content:
+ content_count += 1
+ content_buffer.append(content)
+ if len(''.join(content_buffer)) >= 50 or any(p in content for p in '。，！？.!?'):
+ logger.info(f"回答内容（{content_count}）: {''.join(content_buffer)}")
+ content_buffer = []
+ except json.JSONDecodeError:
+ logger.error(f"无法解析 JSON: {data_str}")
+ if reasoning_buffer:
+ logger.info(f"推理过程（最终）: {''.join(reasoning_buffer)}")
+ if content_buffer:
+ logger.info(f"回答内容（最终）: {''.join(content_buffer)}")
+ logger.info(f"测试完成 - 收到 {reasoning_count} 个推理片段，{content_count} 个回答内容片段")
+ logger.info("=== 硅基流动 DeepSeek-R1 流式API直接调用测试完成 ===")
+ except Exception as e:
+ logger.error(f"测试过程中发生错误: {str(e)}", exc_info=True)
+ logger.error(f"错误类型: {type(e)}")
+def check_environment():
+ provider = os.getenv('REASONING_PROVIDER', '').lower()
+ if provider == 'siliconflow':
+ logger.info("检测到环境变量REASONING_PROVIDER=siliconflow")
+ else:
+ logger.warning(f"当前REASONING_PROVIDER={provider}，非siliconflow，但仍会继续测试")
+ api_key = os.getenv('DEEPSEEK_API_KEY')
+ if api_key:
+ logger.info(f"已从环境变量中读取API密钥: {api_key[:8]}***")
+ else:
+ logger.warning("环境变量中未设置DEEPSEEK_API_KEY")
+ api_url = os.getenv('DEEPSEEK_API_URL')
+ if api_url:
+ logger.info(f"已从环境变量中读取API URL: {api_url}")
+ else:
+ logger.warning("环境变量中未设置DEEPSEEK_API_URL，将使用默认值")
+ is_origin_reasoning = os.getenv('IS_ORIGIN_REASONING', '').lower() == 'true'
+ reasoning_mode = os.getenv('DEEPSEEK_REASONING_MODE', '')
+ if is_origin_reasoning and reasoning_mode == 'reasoning_field':
+ logger.info("推理模式配置正确")
+ else:
+ logger.warning(f"当前推理模式可能不适合硅基流动API：IS_ORIGIN_REASONING={is_origin_reasoning}, DEEPSEEK_REASONING_MODE={reasoning_mode}")
+ logger.warning("已自动设置为正确的推理模式")
+def main():
+ check_environment()
+ args = parse_args()
+ if args.debug:
+ os.environ['LOG_LEVEL'] = 'DEBUG'
+ else:
+ os.environ['LOG_LEVEL'] = 'INFO'
+ loop = asyncio.get_event_loop()
+ loop.run_until_complete(test_siliconflow_reasoning(args))
+ loop.run_until_complete(test_siliconflow_non_stream_api(args))
+ loop.run_until_complete(test_siliconflow_stream_api_direct(args))
+ loop.close()
+if __name__ == "__main__":
+ main()```
 ______________________________
 
 # 配置文件

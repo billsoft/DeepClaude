@@ -94,6 +94,17 @@ IS_ORIGIN_REASONING = os.getenv("IS_ORIGIN_REASONING", "false").lower() == "true
 # 获取思考者提供商配置
 REASONING_PROVIDER = os.getenv("REASONING_PROVIDER", "deepseek").lower()
 
+# 为硅基流动和NVIDIA提供商设置必要的推理模式
+if REASONING_PROVIDER in ['siliconflow', 'nvidia']:
+    if os.getenv('DEEPSEEK_REASONING_MODE', 'auto') != 'reasoning_field':
+        logger.warning(f"硅基流动/NVIDIA提供商推荐使用reasoning_field推理模式，当前模式为: {os.getenv('DEEPSEEK_REASONING_MODE', 'auto')}")
+        logger.warning("已自动设置为reasoning_field模式")
+        os.environ['DEEPSEEK_REASONING_MODE'] = 'reasoning_field'
+    
+    if not os.getenv('IS_ORIGIN_REASONING', 'false').lower() == 'true':
+        logger.warning("硅基流动/NVIDIA提供商需要启用原始推理格式，已自动设置IS_ORIGIN_REASONING=true")
+        os.environ['IS_ORIGIN_REASONING'] = 'true'
+
 # CORS中间件配置
 # allow_origins_list: 允许的源列表，从ALLOW_ORIGINS环境变量解析
 # allow_credentials: 允许携带认证信息
@@ -118,6 +129,16 @@ if REASONING_PROVIDER == 'ollama' and not OLLAMA_API_URL:
 # 验证必要的配置
 if REASONING_PROVIDER == 'deepseek' and not DEEPSEEK_API_KEY:
     logger.critical("使用 DeepSeek 推理时必须设置 DEEPSEEK_API_KEY")
+    sys.exit(1)
+
+# 验证硅基流动配置
+if REASONING_PROVIDER == 'siliconflow' and not DEEPSEEK_API_KEY:
+    logger.critical("使用硅基流动推理时必须设置 DEEPSEEK_API_KEY")
+    sys.exit(1)
+
+# 验证NVIDIA配置
+if REASONING_PROVIDER == 'nvidia' and not DEEPSEEK_API_KEY:
+    logger.critical("使用NVIDIA推理时必须设置 DEEPSEEK_API_KEY")
     sys.exit(1)
 
 if not CLAUDE_API_KEY:

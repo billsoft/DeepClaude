@@ -59,6 +59,11 @@ class DeepClaude:
         1. 思考者(DeepSeek/Ollama)提供思考过程
         2. 回答者(Claude)根据思考过程和原题生成答案
         """
+        # 保存配置参数，用于验证
+        self.deepseek_api_key = kwargs.get('deepseek_api_key')
+        self.deepseek_api_url = kwargs.get('deepseek_api_url')
+        self.ollama_api_url = kwargs.get('ollama_api_url')
+        
         # 1. 初始化回答者(Claude)
         self.claude_client = ClaudeClient(
             api_key=kwargs.get('claude_api_key'),
@@ -78,6 +83,16 @@ class DeepClaude:
             ),
             'ollama': lambda: OllamaR1Client(
                 api_url=kwargs.get('ollama_api_url')
+            ),
+            'siliconflow': lambda: DeepSeekClient(
+                api_key=kwargs.get('deepseek_api_key'),
+                api_url=kwargs.get('deepseek_api_url'),
+                provider='siliconflow'
+            ),
+            'nvidia': lambda: DeepSeekClient(
+                api_key=kwargs.get('deepseek_api_key'),
+                api_url=kwargs.get('deepseek_api_url'),
+                provider='nvidia'
             )
         }
         
@@ -569,11 +584,13 @@ class DeepClaude:
             return result or "无法获取足够的推理内容"
         except Exception as e:
             logger.error(f"主要推理提供者失败: {e}")
-            # 如果配置了 Ollama 作为备用，则尝试切换
-            if hasattr(self, 'ollama_api_url'):
-                logger.info("尝试切换到 Ollama 推理提供者")
+            if isinstance(provider, DeepSeekClient):
+                # 获取当前提供商名称
+                current_provider = getattr(provider, 'provider', 'unknown')
+                logger.info(f"从 {current_provider} 提供商切换到 Ollama 推理提供者")
                 try:
-                    provider = OllamaR1Client(self.ollama_api_url)
+                    provider = OllamaR1Client(api_url=os.getenv('OLLAMA_API_URL'))
+                    # 重试使用 Ollama
                     reasoning_content = []
                     async for content_type, content in provider.get_reasoning(
                         messages=messages,
@@ -691,18 +708,24 @@ class DeepClaude:
         except Exception as e:
             logger.error(f"主要推理提供者失败: {e}")
             if isinstance(provider, DeepSeekClient):
-                logger.info("尝试切换到 Ollama 推理提供者")
-                provider = OllamaR1Client(self.ollama_api_url)
-                # 重试使用 Ollama
-                reasoning_content = []
-                async for content_type, content in provider.get_reasoning(
-                    messages=messages,
-                    model="deepseek-r1:32b"
-                ):
-                    if content_type == "reasoning":
-                        reasoning_content.append(content)
-                return "".join(reasoning_content)
-            raise
+                # 获取当前提供商名称
+                current_provider = getattr(provider, 'provider', 'unknown')
+                logger.info(f"从 {current_provider} 提供商切换到 Ollama 推理提供者")
+                try:
+                    provider = OllamaR1Client(api_url=os.getenv('OLLAMA_API_URL'))
+                    # 重试使用 Ollama
+                    reasoning_content = []
+                    async for content_type, content in provider.get_reasoning(
+                        messages=messages,
+                        model="deepseek-r1:32b"
+                    ):
+                        if content_type == "reasoning":
+                            reasoning_content.append(content)
+                    return "\n".join(reasoning_content)
+                except Exception as e:
+                    logger.error(f"备用推理提供者也失败: {e}")
+                
+            return "无法获取推理内容"
 
     def _validate_config(self):
         """验证配置的完整性"""
@@ -716,6 +739,16 @@ class DeepClaude:
         elif provider == 'ollama':
             if not self.ollama_api_url:
                 raise ValueError("使用 Ollama 时必须提供 API URL")
+        elif provider == 'siliconflow':
+            if not self.deepseek_api_key:
+                raise ValueError("使用 硅基流动 时必须提供 DeepSeek API KEY")
+            if not self.deepseek_api_url:
+                raise ValueError("使用 硅基流动 时必须提供 DeepSeek API URL")
+        elif provider == 'nvidia':
+            if not self.deepseek_api_key:
+                raise ValueError("使用 NVIDIA 时必须提供 DeepSeek API KEY")
+            if not self.deepseek_api_url:
+                raise ValueError("使用 NVIDIA 时必须提供 DeepSeek API URL")
 
     def _format_stream_response(self, content: str, content_type: str = "content", **kwargs) -> bytes:
         """格式化流式响应
