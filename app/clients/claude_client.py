@@ -98,7 +98,7 @@ class ClaudeClient(BaseClient):
             **kwargs: 其他参数
         """
         data = {
-            "model": kwargs.get("model", "claude-3-5-sonnet-20241022"),
+            "model": kwargs.get("model", os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219')),
             "messages": messages,
             "max_tokens": kwargs.get("max_tokens", 8192),
             "temperature": kwargs.get("temperature", 0.7),
@@ -165,7 +165,7 @@ class ClaudeClient(BaseClient):
             # 如果是非流式模式，返回一个"answer"类型的内容
             async for content_type, content in self.stream_chat(
                 messages=messages,
-                model=kwargs.get('model', 'claude-3-5-sonnet-20241022'),
+                model=kwargs.get('model', os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219')),
                 **kwargs
             ):
                 # 将所有内容收集起来

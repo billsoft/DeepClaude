@@ -21,10 +21,12 @@ async def test_claude_stream():
     api_key = os.getenv("CLAUDE_API_KEY")
     api_url = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
     provider = os.getenv("CLAUDE_PROVIDER", "anthropic")
+    model = os.getenv("CLAUDE_MODEL", "claude-3-7-sonnet-20250219")  # 默认使用3.7模型
     
     logger.info(f"API URL: {api_url}")
     logger.info(f"API Key 是否存在: {bool(api_key)}")
     logger.info(f"Provider: {provider}")
+    logger.info(f"Model: {model}")
     
     # 添加代理配置检查
     enable_proxy = os.getenv('CLAUDE_ENABLE_PROXY', 'false').lower() == 'true'
@@ -49,7 +51,7 @@ async def test_claude_stream():
         async for content_type, content in client.stream_chat(
             messages=messages,
             model_arg=(0.7, 0.9, 0, 0),
-            model="claude-3-5-sonnet-20241022"
+            model=model  # 使用从环境变量获取的模型名称
         ):
             if content_type == "answer":
                 logger.info(f"收到回答内容: {content}")

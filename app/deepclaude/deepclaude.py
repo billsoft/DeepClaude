@@ -394,7 +394,7 @@ class DeepClaude:
     def _prepare_answerer_kwargs(self, kwargs: dict) -> dict:
         """准备回答者参数"""
         return {
-            'model': 'claude-3-5-sonnet-20241022',
+            'model': os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'),
             'temperature': kwargs.get('temperature', 0.7),
             'top_p': kwargs.get('top_p', 0.9)
         }
@@ -433,7 +433,7 @@ class DeepClaude:
         messages: list,
         model_arg: tuple[float, float, float, float],
         deepseek_model: str = "deepseek-reasoner",
-        claude_model: str = "claude-3-5-sonnet-20241022"
+        claude_model: str = os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219')
     ) -> dict:
         """非流式对话完成
         
