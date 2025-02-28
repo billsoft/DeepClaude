@@ -137,10 +137,12 @@ class ClaudeClient(BaseClient):
                                 if response['type'] == 'content_block_delta':
                                     content = response['delta'].get('text', '')
                                     if content:
-                                        yield {"delta": {"content": content}}
+                                        # 修改返回格式为(content_type, content)元组
+                                        yield "content", content
                             elif 'choices' in response:  # OpenAI 格式
                                 if response['choices'][0].get('delta', {}).get('content'):
-                                    yield response['choices'][0]
+                                    # 修改返回格式为(content_type, content)元组
+                                    yield "content", response['choices'][0].get('delta', {}).get('content')
                                     
                 except json.JSONDecodeError as e:
                     logger.error(f"解析Claude响应失败: {e}")
@@ -158,6 +160,18 @@ class ClaudeClient(BaseClient):
         Yields:
             tuple[str, str]: 空生成器，因为 Claude 不提供推理
         """
-        # Claude 不提供推理过程
+        # Claude 不提供推理过程，但为了与接口一致，我们可以返回一个空内容
+        if kwargs.get('stream', True) == False:
+            # 如果是非流式模式，返回一个"answer"类型的内容
+            async for content_type, content in self.stream_chat(
+                messages=messages,
+                model=kwargs.get('model', 'claude-3-5-sonnet-20241022'),
+                **kwargs
+            ):
+                # 将所有内容收集起来
+                all_content = content
+                # 作为answer类型返回
+                yield "answer", all_content
+                return
+        # 其他情况下，不产生任何内容        
         return
-        yield  # 为了满足生成器语法要求
