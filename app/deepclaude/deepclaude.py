@@ -30,6 +30,9 @@ import aiohttp
 import os
 from dotenv import load_dotenv
 
+# 数据库相关导入
+from app.database.db_utils import add_reasoning_column_if_not_exists
+
 load_dotenv()
 
 class DeepClaude:
@@ -100,6 +103,28 @@ class DeepClaude:
         self.min_reasoning_chars = int(os.getenv('MIN_REASONING_CHARS', '50'))
         self.max_retries = int(os.getenv('REASONING_MAX_RETRIES', '2'))
         self.reasoning_modes = os.getenv('REASONING_MODE_SEQUENCE', 'auto,think_tags,early_content,any_content').split(',')
+        
+        # 4. 数据库存储配置
+        self.save_to_db = os.getenv('SAVE_TO_DB', 'true').lower() == 'true'
+        self.current_conversation_id = None  # 当前对话ID
+        
+        # 使用前导入数据库模块
+        if self.save_to_db:
+            try:
+                from app.database.db_operations import DatabaseOperations
+                from app.database.db_utils import add_reasoning_column_if_not_exists
+                
+                # 检查并确保数据库表结构与模型一致
+                add_reasoning_column_if_not_exists()
+                
+                self.db_ops = DatabaseOperations
+                logger.info("数据库存储功能已启用")
+            except ImportError as e:
+                logger.warning(f"数据库模块导入失败，禁用数据库存储功能: {e}")
+                self.save_to_db = False
+            except Exception as e:
+                logger.error(f"数据库初始化错误，禁用数据库存储功能: {e}")
+                self.save_to_db = False
 
     def _get_reasoning_provider(self):
         """获取思考者实例"""
@@ -169,6 +194,44 @@ class DeepClaude:
     async def chat_completions_with_stream(self, messages: list, **kwargs):
         try:
             logger.info("开始流式处理请求...")
+            
+            # 创建或获取对话ID
+            if self.save_to_db:
+                try:
+                    # 提取用户ID（如果有的话）
+                    user_id = kwargs.get('user_id')
+                    
+                    # 检查是否有现有对话ID
+                    conversation_id = kwargs.get('conversation_id')
+                    
+                    if not conversation_id:
+                        # 从最后一条消息中提取标题（取前20个字符作为对话标题）
+                        if messages and 'content' in messages[-1]:
+                            title = messages[-1]['content'][:20] + "..."
+                        else:
+                            title = None
+                            
+                        # 创建新对话
+                        self.current_conversation_id = self.db_ops.create_conversation(
+                            user_id=user_id, 
+                            title=title
+                        )
+                        logger.info(f"创建新对话，ID: {self.current_conversation_id}")
+                    else:
+                        self.current_conversation_id = conversation_id
+                        logger.info(f"使用现有对话，ID: {self.current_conversation_id}")
+                    
+                    # 保存用户问题
+                    if messages and 'content' in messages[-1]:
+                        self.db_ops.add_conversation_history(
+                            conversation_id=self.current_conversation_id,
+                            user_id=user_id,
+                            role="user",
+                            content=messages[-1]['content']
+                        )
+                        logger.info("用户问题已保存到数据库")
+                except Exception as db_e:
+                    logger.error(f"保存对话数据失败: {db_e}")
             
             # 获取思考者实例
             provider = self._get_reasoning_provider()
@@ -331,6 +394,8 @@ class DeepClaude:
             
             try:
                 answer_begun = False
+                full_answer = []  # 收集完整回答
+                
                 async for content_type, content in self.claude_client.stream_chat(
                     messages=[{"role": "user", "content": prompt}],
                     **self._prepare_answerer_kwargs(kwargs)
@@ -340,6 +405,9 @@ class DeepClaude:
                             # 标记回答开始
                             answer_begun = True
                             
+                        # 收集完整回答
+                        full_answer.append(content)
+                        
                         # 转发回答 token，明确标记为普通内容
                         yield self._format_stream_response(
                             content,
@@ -347,6 +415,28 @@ class DeepClaude:
                             is_first_thought=False,  # 非思考内容
                             **kwargs
                         )
+                
+                # 保存AI回答到数据库
+                if self.save_to_db and self.current_conversation_id:
+                    try:
+                        # 获取使用的模型信息
+                        claude_model = kwargs.get('claude_model', os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'))
+                        # 估算token数量（这里只是简单估算）
+                        tokens = len(full_reasoning.split()) + len("".join(full_answer).split())
+                        
+                        # 保存AI回答
+                        self.db_ops.add_conversation_history(
+                            conversation_id=self.current_conversation_id,
+                            role="ai",
+                            content="".join(full_answer),
+                            reasoning=full_reasoning,
+                            model_name=claude_model,
+                            tokens=tokens
+                        )
+                        logger.info("AI回答和思考过程已保存到数据库")
+                    except Exception as db_e:
+                        logger.error(f"保存AI回答数据失败: {db_e}")
+                
             except Exception as e:
                 logger.error(f"回答阶段发生错误: {e}", exc_info=True)
                 yield self._format_stream_response(
@@ -449,6 +539,38 @@ class DeepClaude:
         logger.info("开始处理请求...")
         logger.debug(f"输入消息: {messages}")
         
+        # 创建或获取对话ID
+        if self.save_to_db:
+            try:
+                # 提取用户ID（如果有的话）
+                user_id = None  # 非流式模式通常不传递用户ID，使用默认管理员用户
+                
+                # 从最后一条消息中提取标题（取前20个字符作为对话标题）
+                if messages and 'content' in messages[-1]:
+                    title = messages[-1]['content'][:20] + "..."
+                    # 保存用户问题
+                    user_question = messages[-1]['content']
+                else:
+                    title = None
+                    user_question = "未提供问题内容"
+                    
+                # 创建新对话
+                self.current_conversation_id = self.db_ops.create_conversation(
+                    user_id=user_id, 
+                    title=title
+                )
+                logger.info(f"创建新对话，ID: {self.current_conversation_id}")
+                
+                # 保存用户问题
+                self.db_ops.add_conversation_history(
+                    conversation_id=self.current_conversation_id,
+                    role="user",
+                    content=user_question
+                )
+                logger.info("用户问题已保存到数据库")
+            except Exception as db_e:
+                logger.error(f"保存对话数据失败: {db_e}")
+        
         # 1. 获取推理内容
         logger.info("正在获取推理内容...")
         try:
@@ -502,6 +624,25 @@ class DeepClaude:
                 if content_type in ["answer", "content"]:
                     logger.debug(f"获取到 Claude 回答: {content}")
                     full_content += content
+            
+            # 保存AI回答到数据库
+            if self.save_to_db and self.current_conversation_id:
+                try:
+                    # 估算token数量
+                    tokens = len(reasoning.split()) + len(full_content.split())
+                    
+                    # 保存AI回答
+                    self.db_ops.add_conversation_history(
+                        conversation_id=self.current_conversation_id,
+                        role="ai",
+                        content=full_content,
+                        reasoning=reasoning,
+                        model_name=claude_model,
+                        tokens=tokens
+                    )
+                    logger.info("AI回答和思考过程已保存到数据库")
+                except Exception as db_e:
+                    logger.error(f"保存AI回答数据失败: {db_e}")
             
             # 返回完整的回答内容
             return {

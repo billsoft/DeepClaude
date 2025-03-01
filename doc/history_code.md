@@ -16,6 +16,11 @@
 │   │   ├── deepseek_client.py
 │   │   ├── ollama_r1.py
 │   │   ├── __init__.py
+│   ├── database/
+│   │   ├── db_config.py
+│   │   ├── db_models.py
+│   │   ├── db_operations.py
+│   │   ├── __init__.py
 │   ├── deepclaude/
 │   │   ├── deepclaude.py
 │   │   ├── __init__.py
@@ -877,6 +882,361 @@ from .ollama_r1 import OllamaR1Client
 __all__ = ['BaseClient', 'DeepSeekClient', 'ClaudeClient', 'OllamaR1Client']```
 ______________________________
 
+## ...\database\db_config.py
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, scoped_session
+import os
+from dotenv import load_dotenv
+from app.utils.logger import logger
+load_dotenv()
+DB_URL = os.getenv("DB_URL", "mysql+pymysql://root:123654CCc.@bj-cdb-oqrn4mh2.sql.tencentcdb.com:24734/deepsysai?charset=utf8mb3")
+engine = create_engine(
+ DB_URL,
+ pool_size=10,
+ max_overflow=20,
+ pool_recycle=3600,
+ pool_pre_ping=True
+)
+SessionFactory = sessionmaker(bind=engine, autoflush=False)
+Session = scoped_session(SessionFactory)
+Base = declarative_base()
+def get_db_session():
+ db = Session()
+ try:
+ return db
+ except Exception as e:
+ db.rollback()
+ logger.error(f"数据库会话创建失败: {e}")
+ raise
+def close_db_session(db):
+ db.close()```
+______________________________
+
+## ...\database\db_models.py
+```python
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum, Float
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+from .db_config import Base
+import enum
+class SatisfactionEnum(enum.Enum):
+ satisfied = "satisfied"
+ neutral = "neutral"
+ unsatisfied = "unsatisfied"
+class RoleEnum(enum.Enum):
+ user = "user"
+ ai = "ai"
+class User(Base):
+ __tablename__ = "users"
+ id = Column(Integer, primary_key=True, autoincrement=True, comment="用户ID，主键")
+ username = Column(String(50), nullable=False, unique=True, comment="用户名")
+ password = Column(String(255), nullable=False, comment="密码（加密存储）")
+ email = Column(String(100), unique=True, nullable=True, comment="用户邮箱")
+ real_name = Column(String(50), nullable=True, comment="用户真实姓名")
+ phone = Column(String(20), nullable=True, comment="联系电话")
+ role_id = Column(Integer, ForeignKey("roles.id"), nullable=False, comment="角色ID，外键")
+ refresh_token = Column(String(500), nullable=True, comment="JWT刷新令牌")
+ token_expire_time = Column(DateTime, nullable=True, comment="令牌过期时间")
+ create_time = Column(DateTime, default=func.now(), nullable=False, comment="创建时间")
+ update_time = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False, comment="更新时间")
+ last_login = Column(DateTime, nullable=True, comment="最后登录时间")
+ status = Column(Integer, default=1, nullable=False, comment="状态：1-正常，0-禁用")
+ avatar = Column(String(255), nullable=True, comment="用户头像URL")
+ login_ip = Column(String(50), nullable=True, comment="最后登录IP")
+ role = relationship("Role", back_populates="users")
+ conversation_lists = relationship("ConversationList", back_populates="user")
+ conversation_histories = relationship("ConversationHistory", back_populates="user")
+class Role(Base):
+ __tablename__ = "roles"
+ id = Column(Integer, primary_key=True, autoincrement=True, comment="角色ID，主键")
+ name = Column(String(50), nullable=False, unique=True, comment="角色名称")
+ description = Column(String(200), nullable=True, comment="角色描述")
+ create_time = Column(DateTime, default=func.now(), nullable=False, comment="创建时间")
+ update_time = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False, comment="更新时间")
+ users = relationship("User", back_populates="role")
+class Category(Base):
+ __tablename__ = "categories"
+ id = Column(Integer, primary_key=True, autoincrement=True, comment="分类ID，主键")
+ name = Column(String(100), nullable=False, comment="分类名称")
+ parent_id = Column(Integer, ForeignKey("categories.id"), nullable=True, comment="父分类ID，为空表示顶级分类")
+ description = Column(String(500), nullable=True, comment="分类描述")
+ sort_order = Column(Integer, default=0, nullable=False, comment="排序顺序")
+ create_time = Column(DateTime, default=func.now(), nullable=False, comment="创建时间")
+ update_time = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False, comment="更新时间")
+ children = relationship("Category", back_populates="parent", remote_side=[id])
+ parent = relationship("Category", back_populates="children", remote_side=[parent_id])
+ conversation_lists = relationship("ConversationList", back_populates="category")
+ knowledge_bases = relationship("KnowledgeBase", back_populates="category")
+class ConversationList(Base):
+ __tablename__ = "conversation_lists"
+ id = Column(Integer, primary_key=True, autoincrement=True, comment="对话列表ID，主键")
+ user_id = Column(Integer, ForeignKey("users.id"), nullable=False, comment="用户ID，外键")
+ title = Column(String(200), nullable=True, comment="对话标题，可自动生成或用户自定义")
+ category_id = Column(Integer, ForeignKey("categories.id"), nullable=True, comment="分类ID，外键")
+ satisfaction = Column(Enum(SatisfactionEnum), nullable=True, comment="用户满意度评价")
+ feedback = Column(Text, nullable=True, comment="用户反馈内容")
+ create_time = Column(DateTime, default=func.now(), nullable=False, comment="创建时间")
+ update_time = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False, comment="更新时间")
+ is_completed = Column(Boolean, default=False, nullable=False, comment="是否已完成：0-进行中，1-已完成")
+ user = relationship("User", back_populates="conversation_lists")
+ category = relationship("Category", back_populates="conversation_lists")
+ conversation_histories = relationship("ConversationHistory", back_populates="conversation_list", cascade="all, delete-orphan")
+ knowledge_bases = relationship("KnowledgeBase", back_populates="source_conversation")
+class ConversationHistory(Base):
+ __tablename__ = "conversation_history"
+ id = Column(Integer, primary_key=True, autoincrement=True, comment="历史记录ID，主键")
+ conversation_id = Column(Integer, ForeignKey("conversation_lists.id"), nullable=False, comment="所属对话列表ID，外键")
+ user_id = Column(Integer, ForeignKey("users.id"), nullable=False, comment="用户ID，外键")
+ role = Column(Enum(RoleEnum), nullable=False, comment="发言角色：用户或AI")
+ content = Column(Text, nullable=False, comment="对话内容")
+ create_time = Column(DateTime, default=func.now(), nullable=False, comment="创建时间")
+ is_error = Column(Boolean, default=False, nullable=False, comment="是否包含错误：0-正常，1-错误")
+ is_duplicate = Column(Boolean, default=False, nullable=False, comment="是否重复内容：0-不是，1-是")
+ tokens = Column(Integer, nullable=True, comment="Token数量，用于计算资源使用")
+ model_name = Column(String(100), nullable=True, comment="使用的AI模型名称")
+ reasoning = Column(Text, nullable=True, comment="思考过程内容")
+ conversation_list = relationship("ConversationList", back_populates="conversation_histories")
+ user = relationship("User", back_populates="conversation_histories")
+class KnowledgeBase(Base):
+ __tablename__ = "knowledge_base"
+ id = Column(Integer, primary_key=True, autoincrement=True, comment="知识条目ID，主键")
+ question = Column(String(500), nullable=False, comment="标准问题")
+ answer = Column(Text, nullable=False, comment="标准答案")
+ source_conversation_id = Column(Integer, ForeignKey("conversation_lists.id"), nullable=True, comment="来源对话ID，可为空")
+ category_id = Column(Integer, ForeignKey("categories.id"), nullable=True, comment="分类ID，外键")
+ keywords = Column(String(500), nullable=True, comment="关键词，用于检索")
+ create_time = Column(DateTime, default=func.now(), nullable=False, comment="创建时间")
+ update_time = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False, comment="更新时间")
+ creator_id = Column(Integer, nullable=True, comment="创建者ID，可能是自动提取或人工创建")
+ status = Column(Integer, default=1, nullable=False, comment="状态：1-启用，0-禁用")
+ confidence_score = Column(Float, nullable=True, comment="置信度分数，表示该知识条目的可靠性")
+ source_conversation = relationship("ConversationList", back_populates="knowledge_bases")
+ category = relationship("Category", back_populates="knowledge_bases")```
+______________________________
+
+## ...\database\db_operations.py
+```python
+from sqlalchemy.exc import SQLAlchemyError
+from .db_config import get_db_session, close_db_session
+from .db_models import User, Role, Category, ConversationList, ConversationHistory, KnowledgeBase, RoleEnum, SatisfactionEnum
+from app.utils.logger import logger
+from typing import Optional, List, Dict, Any, Tuple
+import datetime
+import hashlib
+import uuid
+class DatabaseOperations:
+ @staticmethod
+ def get_or_create_admin_user() -> int:
+ db = get_db_session()
+ try:
+ admin_role = db.query(Role).filter(Role.name == "admin").first()
+ if not admin_role:
+ admin_role = Role(name="admin", description="系统管理员，拥有所有权限")
+ db.add(admin_role)
+ db.commit()
+ admin_role = db.query(Role).filter(Role.name == "admin").first()
+ admin_user = db.query(User).filter(User.username == "admin").first()
+ if not admin_user:
+ default_password = hashlib.sha256("admin123".encode()).hexdigest()
+ admin_user = User(
+ username="admin",
+ password=default_password,
+ email="admin@deepsysai.com",
+ real_name="System Admin",
+ role_id=admin_role.id,
+ status=1
+ )
+ db.add(admin_user)
+ db.commit()
+ admin_user = db.query(User).filter(User.username == "admin").first()
+ return admin_user.id
+ except SQLAlchemyError as e:
+ db.rollback()
+ logger.error(f"获取或创建管理员用户失败: {e}")
+ raise
+ finally:
+ close_db_session(db)
+ @staticmethod
+ def create_conversation(user_id: Optional[int] = None, title: Optional[str] = None,
+ category_id: Optional[int] = None) -> int:
+ db = get_db_session()
+ try:
+ if user_id is None:
+ user_id = DatabaseOperations.get_or_create_admin_user()
+ if title is None:
+ title = f"对话_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+ conversation = ConversationList(
+ user_id=user_id,
+ title=title,
+ category_id=category_id,
+ is_completed=False
+ )
+ db.add(conversation)
+ db.commit()
+ return conversation.id
+ except SQLAlchemyError as e:
+ db.rollback()
+ logger.error(f"创建对话失败: {e}")
+ raise
+ finally:
+ close_db_session(db)
+ @staticmethod
+ def add_conversation_history(conversation_id: int, user_id: Optional[int] = None,
+ role: str = "user", content: str = "", reasoning: Optional[str] = None,
+ model_name: Optional[str] = None, tokens: Optional[int] = None) -> int:
+ db = get_db_session()
+ try:
+ if user_id is None:
+ user_id = DatabaseOperations.get_or_create_admin_user()
+ conversation = db.query(ConversationList).filter(ConversationList.id == conversation_id).first()
+ if not conversation:
+ raise ValueError(f"对话ID {conversation_id} 不存在")
+ history = ConversationHistory(
+ conversation_id=conversation_id,
+ user_id=user_id,
+ role=RoleEnum(role),
+ content=content,
+ reasoning=reasoning,
+ model_name=model_name,
+ tokens=tokens
+ )
+ db.add(history)
+ conversation.update_time = datetime.datetime.now()
+ db.commit()
+ return history.id
+ except SQLAlchemyError as e:
+ db.rollback()
+ logger.error(f"添加对话历史失败: {e}")
+ raise
+ finally:
+ close_db_session(db)
+ @staticmethod
+ def get_conversation_history(conversation_id: int) -> List[Dict[str, Any]]:
+ db = get_db_session()
+ try:
+ histories = db.query(ConversationHistory).filter(
+ ConversationHistory.conversation_id == conversation_id
+ ).order_by(ConversationHistory.create_time).all()
+ result = []
+ for history in histories:
+ result.append({
+ "id": history.id,
+ "role": history.role.value,
+ "content": history.content,
+ "reasoning": history.reasoning,
+ "create_time": history.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+ "model_name": history.model_name,
+ "tokens": history.tokens
+ })
+ return result
+ except SQLAlchemyError as e:
+ logger.error(f"获取对话历史失败: {e}")
+ raise
+ finally:
+ close_db_session(db)
+ @staticmethod
+ def complete_conversation(conversation_id: int, satisfaction: Optional[str] = None,
+ feedback: Optional[str] = None) -> bool:
+ db = get_db_session()
+ try:
+ conversation = db.query(ConversationList).filter(ConversationList.id == conversation_id).first()
+ if not conversation:
+ raise ValueError(f"对话ID {conversation_id} 不存在")
+ conversation.is_completed = True
+ if satisfaction:
+ conversation.satisfaction = SatisfactionEnum(satisfaction)
+ if feedback:
+ conversation.feedback = feedback
+ db.commit()
+ return True
+ except SQLAlchemyError as e:
+ db.rollback()
+ logger.error(f"完成对话失败: {e}")
+ raise
+ finally:
+ close_db_session(db)
+ @staticmethod
+ def get_user_conversations(user_id: Optional[int] = None,
+ limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+ db = get_db_session()
+ try:
+ if user_id is None:
+ user_id = DatabaseOperations.get_or_create_admin_user()
+ conversations = db.query(ConversationList).filter(
+ ConversationList.user_id == user_id
+ ).order_by(ConversationList.update_time.desc()).limit(limit).offset(offset).all()
+ result = []
+ for conversation in conversations:
+ last_ai_reply = db.query(ConversationHistory).filter(
+ ConversationHistory.conversation_id == conversation.id,
+ ConversationHistory.role == RoleEnum.ai
+ ).order_by(ConversationHistory.create_time.desc()).first()
+ message_count = db.query(ConversationHistory).filter(
+ ConversationHistory.conversation_id == conversation.id
+ ).count()
+ preview = last_ai_reply.content[:100] + "..." if last_ai_reply and len(last_ai_reply.content) > 100 else (
+ last_ai_reply.content if last_ai_reply else "")
+ result.append({
+ "id": conversation.id,
+ "title": conversation.title,
+ "create_time": conversation.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+ "update_time": conversation.update_time.strftime("%Y-%m-%d %H:%M:%S"),
+ "is_completed": conversation.is_completed,
+ "satisfaction": conversation.satisfaction.value if conversation.satisfaction else None,
+ "message_count": message_count,
+ "preview": preview
+ })
+ return result
+ except SQLAlchemyError as e:
+ logger.error(f"获取用户对话列表失败: {e}")
+ raise
+ finally:
+ close_db_session(db)
+ @staticmethod
+ def update_conversation_title(conversation_id: int, title: str) -> bool:
+ db = get_db_session()
+ try:
+ conversation = db.query(ConversationList).filter(ConversationList.id == conversation_id).first()
+ if not conversation:
+ raise ValueError(f"对话ID {conversation_id} 不存在")
+ conversation.title = title
+ db.commit()
+ return True
+ except SQLAlchemyError as e:
+ db.rollback()
+ logger.error(f"更新对话标题失败: {e}")
+ raise
+ finally:
+ close_db_session(db)
+ @staticmethod
+ def delete_conversation(conversation_id: int) -> bool:
+ db = get_db_session()
+ try:
+ conversation = db.query(ConversationList).filter(ConversationList.id == conversation_id).first()
+ if not conversation:
+ raise ValueError(f"对话ID {conversation_id} 不存在")
+ db.query(ConversationHistory).filter(ConversationHistory.conversation_id == conversation_id).delete()
+ db.delete(conversation)
+ db.commit()
+ return True
+ except SQLAlchemyError as e:
+ db.rollback()
+ logger.error(f"删除对话失败: {e}")
+ raise
+ finally:
+ close_db_session(db)
+ @staticmethod
+ def generate_conversation_id() -> str:
+ return str(uuid.uuid4())```
+______________________________
+
+## ...\database\__init__.py
+```python
+```
+______________________________
+
 ## ...\deepclaude\deepclaude.py
 ```python
 import json
@@ -925,6 +1285,16 @@ class DeepClaude:
  self.min_reasoning_chars = int(os.getenv('MIN_REASONING_CHARS', '50'))
  self.max_retries = int(os.getenv('REASONING_MAX_RETRIES', '2'))
  self.reasoning_modes = os.getenv('REASONING_MODE_SEQUENCE', 'auto,think_tags,early_content,any_content').split(',')
+ self.save_to_db = os.getenv('SAVE_TO_DB', 'true').lower() == 'true'
+ self.current_conversation_id = None
+ if self.save_to_db:
+ try:
+ from app.database.db_operations import DatabaseOperations
+ self.db_ops = DatabaseOperations
+ logger.info("数据库存储功能已启用")
+ except ImportError as e:
+ logger.warning(f"数据库模块导入失败，禁用数据库存储功能: {e}")
+ self.save_to_db = False
  def _get_reasoning_provider(self):
  provider = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
  if provider not in self.reasoning_providers:
@@ -984,6 +1354,33 @@ class DeepClaude:
  async def chat_completions_with_stream(self, messages: list, **kwargs):
  try:
  logger.info("开始流式处理请求...")
+ if self.save_to_db:
+ try:
+ user_id = kwargs.get('user_id')
+ conversation_id = kwargs.get('conversation_id')
+ if not conversation_id:
+ if messages and 'content' in messages[-1]:
+ title = messages[-1]['content'][:20] + "..."
+ else:
+ title = None
+ self.current_conversation_id = self.db_ops.create_conversation(
+ user_id=user_id,
+ title=title
+ )
+ logger.info(f"创建新对话，ID: {self.current_conversation_id}")
+ else:
+ self.current_conversation_id = conversation_id
+ logger.info(f"使用现有对话，ID: {self.current_conversation_id}")
+ if messages and 'content' in messages[-1]:
+ self.db_ops.add_conversation_history(
+ conversation_id=self.current_conversation_id,
+ user_id=user_id,
+ role="user",
+ content=messages[-1]['content']
+ )
+ logger.info("用户问题已保存到数据库")
+ except Exception as db_e:
+ logger.error(f"保存对话数据失败: {db_e}")
  provider = self._get_reasoning_provider()
  reasoning_content = []
  thought_complete = False
@@ -1099,6 +1496,7 @@ class DeepClaude:
  logger.debug(f"发送给Claude的提示词: {prompt[:500]}...")
  try:
  answer_begun = False
+ full_answer = []
  async for content_type, content in self.claude_client.stream_chat(
  messages=[{"role": "user", "content": prompt}],
  **self._prepare_answerer_kwargs(kwargs)
@@ -1106,12 +1504,28 @@ class DeepClaude:
  if content_type == "content" and content:
  if not answer_begun and content.strip():
  answer_begun = True
+ full_answer.append(content)
  yield self._format_stream_response(
  content,
  content_type="content",
  is_first_thought=False,
  **kwargs
  )
+ if self.save_to_db and self.current_conversation_id:
+ try:
+ claude_model = kwargs.get('claude_model', os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'))
+ tokens = len(full_reasoning.split()) + len("".join(full_answer).split())
+ self.db_ops.add_conversation_history(
+ conversation_id=self.current_conversation_id,
+ role="ai",
+ content="".join(full_answer),
+ reasoning=full_reasoning,
+ model_name=claude_model,
+ tokens=tokens
+ )
+ logger.info("AI回答和思考过程已保存到数据库")
+ except Exception as db_e:
+ logger.error(f"保存AI回答数据失败: {db_e}")
  except Exception as e:
  logger.error(f"回答阶段发生错误: {e}", exc_info=True)
  yield self._format_stream_response(
@@ -1165,6 +1579,28 @@ class DeepClaude:
  ) -> dict:
  logger.info("开始处理请求...")
  logger.debug(f"输入消息: {messages}")
+ if self.save_to_db:
+ try:
+ user_id = None
+ if messages and 'content' in messages[-1]:
+ title = messages[-1]['content'][:20] + "..."
+ user_question = messages[-1]['content']
+ else:
+ title = None
+ user_question = "未提供问题内容"
+ self.current_conversation_id = self.db_ops.create_conversation(
+ user_id=user_id,
+ title=title
+ )
+ logger.info(f"创建新对话，ID: {self.current_conversation_id}")
+ self.db_ops.add_conversation_history(
+ conversation_id=self.current_conversation_id,
+ role="user",
+ content=user_question
+ )
+ logger.info("用户问题已保存到数据库")
+ except Exception as db_e:
+ logger.error(f"保存对话数据失败: {db_e}")
  logger.info("正在获取推理内容...")
  try:
  reasoning = await self._get_reasoning_content(
@@ -1204,6 +1640,20 @@ class DeepClaude:
  if content_type in ["answer", "content"]:
  logger.debug(f"获取到 Claude 回答: {content}")
  full_content += content
+ if self.save_to_db and self.current_conversation_id:
+ try:
+ tokens = len(reasoning.split()) + len(full_content.split())
+ self.db_ops.add_conversation_history(
+ conversation_id=self.current_conversation_id,
+ role="ai",
+ content=full_content,
+ reasoning=reasoning,
+ model_name=claude_model,
+ tokens=tokens
+ )
+ logger.info("AI回答和思考过程已保存到数据库")
+ except Exception as db_e:
+ logger.error(f"保存AI回答数据失败: {db_e}")
  return {
  "content": full_content,
  "role": "assistant"
@@ -2299,51 +2749,45 @@ ______________________________
 
 ## .\Dockerfile
 ```dockerfile
-# 使用 Python 3.11 slim 版本作为基础镜像
-# slim版本是一个轻量级的Python镜像，只包含运行Python应用所必需的组件
-# 相比完整版镜像体积更小，更适合部署生产环境
-FROM python:3.11-slim
+# 使用Python 3.11 本地已经有
+FROM python:3.11
 
 # 设置工作目录
-# 在容器内创建/app目录并将其设置为工作目录
-# 后续的操作（如COPY）如果使用相对路径，都会基于这个目录
 WORKDIR /app
 
 # 设置环境变量
-# PYTHONUNBUFFERED=1：确保Python的输出不会被缓存，实时输出日志
-# PYTHONDONTWRITEBYTECODE=1：防止Python将pyc文件写入磁盘
 ENV PYTHONUNBUFFERED=1 \
  PYTHONDONTWRITEBYTECODE=1
 
-# 安装项目依赖包
-# --no-cache-dir：不缓存pip下载的包，减少镜像大小
-# 指定精确的版本号以确保构建的一致性和可重现性
-# aiohttp: 用于异步HTTP请求
-# colorlog: 用于彩色日志输出
-# fastapi: Web框架
-# python-dotenv: 用于加载.env环境变量
-# tiktoken: OpenAI的分词器
-# uvicorn: ASGI服务器
-RUN pip install --no-cache-dir \
- aiohttp==3.11.11 \
- colorlog==6.9.0 \
- fastapi==0.115.8 \
- python-dotenv==1.0.1 \
- tiktoken==0.8.0 \
- "uvicorn[standard]"
+# 完全替换为阿里云镜像源（确保匹配bookworm版本）
+RUN echo "deb https://mirrors.aliyun.com/debian/ bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
+ echo "deb https://mirrors.aliyun.com/debian/ bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
+ echo "deb https://mirrors.aliyun.com/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list
+
+# 安装系统依赖，添加--fix-missing参数增强稳定性
+RUN apt-get update && apt-get install -y --fix-missing --no-install-recommends \
+ gcc \
+ python3-dev \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+# 配置pip使用阿里云镜像
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
+ && pip config set global.trusted-host mirrors.aliyun.com
+
+# 复制requirements.txt文件
+COPY requirements.txt .
+
+# 安装核心Python依赖
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制项目文件
-# 将本地的./app目录下的所有文件复制到容器中的/app/app目录
-COPY ./app ./app
+COPY . .
 
 # 暴露端口
-# 声明容器将使用1124端口
 EXPOSE 1124
 
-# python -m uvicorn：通过Python模块的方式启动uvicorn服务器
-# app.main:app：指定FastAPI应用的导入路径，格式为"模块路径:应用实例变量名"
-# --host 0.0.0.0：允许来自任何IP的访问（不仅仅是localhost）
-# --port 1124：指定服务器监听的端口号
+# 启动应用
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1124"]
 ```
 ______________________________
