@@ -22,15 +22,22 @@ import json
 import time
 import tiktoken
 import asyncio
-from typing import AsyncGenerator
+import uuid
+from typing import AsyncGenerator, Dict, List, Any, Optional, Tuple
 from app.utils.logger import logger
 from app.clients import DeepSeekClient, ClaudeClient, OllamaR1Client
 from app.utils.message_processor import MessageProcessor
 import aiohttp
 import os
 from dotenv import load_dotenv
+import re
+import sys
+import logging
+import requests
+from datetime import datetime
 
 # 数据库相关导入
+from app.database.db_operations import DatabaseOperations
 from app.database.db_utils import add_reasoning_column_if_not_exists
 
 load_dotenv()
@@ -56,76 +63,150 @@ class DeepClaude:
     2. 非流式模式：等待完整结果后一次性返回
     """
     def __init__(self, **kwargs):
-        """初始化 DeepClaude
+        """初始化DeepClaude服务
         
-        工作流程:
-        1. 思考者(DeepSeek/Ollama)提供思考过程
-        2. 回答者(Claude)根据思考过程和原题生成答案
+        Args:
+            **kwargs: 关键字参数
+                save_to_db: 是否保存到数据库，默认为False
+                db_ops: 数据库操作对象，仅在save_to_db为True时使用
+                clients: 客户端对象，用于手动指定客户端，用于测试
+                enable_enhanced_reasoning: 是否启用增强推理，默认为True
+                claude_api_key: Claude API密钥
+                claude_api_url: Claude API URL
+                claude_provider: Claude提供商
+                deepseek_api_key: DeepSeek API密钥
+                deepseek_api_url: DeepSeek API URL
+                deepseek_provider: DeepSeek提供商
+                ollama_api_url: Ollama API URL
+                is_origin_reasoning: 是否使用原始推理格式
         """
-        # 保存配置参数，用于验证
-        self.deepseek_api_key = kwargs.get('deepseek_api_key')
-        self.deepseek_api_url = kwargs.get('deepseek_api_url')
-        self.ollama_api_url = kwargs.get('ollama_api_url')
+        logger.info("初始化DeepClaude服务...")
         
-        # 1. 初始化回答者(Claude)
-        self.claude_client = ClaudeClient(
-            api_key=kwargs.get('claude_api_key'),
-            api_url=kwargs.get('claude_api_url'),
-            provider=kwargs.get('claude_provider')
-        )
+        # 保存传入的配置参数，以便在其他方法中使用
+        self.claude_api_key = kwargs.get('claude_api_key', os.getenv('CLAUDE_API_KEY', ''))
+        self.claude_api_url = kwargs.get('claude_api_url', os.getenv('CLAUDE_API_URL', 'https://api.anthropic.com/v1/messages'))
+        self.claude_provider = kwargs.get('claude_provider', os.getenv('CLAUDE_PROVIDER', 'anthropic'))
+        self.ollama_api_url = kwargs.get('ollama_api_url', os.getenv('OLLAMA_API_URL', ''))
+        self.is_origin_reasoning = kwargs.get('is_origin_reasoning', os.getenv('IS_ORIGIN_REASONING', 'false').lower() == 'true')
         
-        # 保存provider属性，用于模型选择
-        self.provider = kwargs.get('deepseek_provider', 'deepseek')
+        # 推理内容和模式设置
+        self.enable_enhanced_reasoning = kwargs.get('enable_enhanced_reasoning', True)
+        self.min_reasoning_chars = 100  # 最小推理字符数量
+        self.reasoning_modes = ["auto", "chain-of-thought", "zero-shot"]  # 推理模式列表
+        self.saved_reasoning = ""  # 保存的推理内容，用于诊断
+        self.processor = MessageProcessor()  # 消息处理器
         
-        # 2. 配置思考者映射
+        # 定义推理提供者
         self.reasoning_providers = {
             'deepseek': lambda: DeepSeekClient(
-                api_key=kwargs.get('deepseek_api_key'),
-                api_url=kwargs.get('deepseek_api_url'),
-                provider=kwargs.get('deepseek_provider')
-            ),
-            'ollama': lambda: OllamaR1Client(
-                api_url=kwargs.get('ollama_api_url')
+                api_key=kwargs.get('deepseek_api_key', os.getenv('DEEPSEEK_API_KEY', '')),
+                api_url=kwargs.get('deepseek_api_url', os.getenv('DEEPSEEK_API_URL', '')),
+                provider=os.getenv('DEEPSEEK_PROVIDER', 'deepseek')
             ),
             'siliconflow': lambda: DeepSeekClient(
-                api_key=kwargs.get('deepseek_api_key'),
-                api_url=kwargs.get('deepseek_api_url'),
+                api_key=kwargs.get('deepseek_api_key', os.getenv('DEEPSEEK_API_KEY', '')),
+                api_url=kwargs.get('deepseek_api_url', os.getenv('DEEPSEEK_API_URL', '')),
                 provider='siliconflow'
             ),
             'nvidia': lambda: DeepSeekClient(
-                api_key=kwargs.get('deepseek_api_key'),
-                api_url=kwargs.get('deepseek_api_url'),
+                api_key=kwargs.get('deepseek_api_key', os.getenv('DEEPSEEK_API_KEY', '')),
+                api_url=kwargs.get('deepseek_api_url', os.getenv('DEEPSEEK_API_URL', '')),
                 provider='nvidia'
+            ),
+            'ollama': lambda: OllamaR1Client(
+                api_url=kwargs.get('ollama_api_url', os.getenv('OLLAMA_API_URL', ''))
             )
         }
         
-        # 3. 推理提取配置
-        self.min_reasoning_chars = int(os.getenv('MIN_REASONING_CHARS', '50'))
-        self.max_retries = int(os.getenv('REASONING_MAX_RETRIES', '2'))
-        self.reasoning_modes = os.getenv('REASONING_MODE_SEQUENCE', 'auto,think_tags,early_content,any_content').split(',')
+        # 支持的工具列表，不实际执行这些工具，只返回标准格式的响应
+        self.supported_tools = {
+            "search": {
+                "name": "search",
+                "description": "搜索网络获取实时信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "搜索查询内容"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "weather": {
+                "name": "weather",
+                "description": "获取天气信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "地点名称，如：北京、上海"
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "日期，如：today、tomorrow",
+                            "enum": ["today", "tomorrow"]
+                        }
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
         
-        # 4. 数据库存储配置
-        self.save_to_db = os.getenv('SAVE_TO_DB', 'true').lower() == 'true'
-        self.current_conversation_id = None  # 当前对话ID
+        # 添加工具格式转换配置
+        self.tool_format_mapping = {
+            'gpt-4': {
+                'type': 'function',
+                'function_field': 'function'
+            },
+            'gpt-3.5-turbo': {
+                'type': 'function',
+                'function_field': 'function'
+            },
+            'claude-3': {
+                'type': 'tool',
+                'function_field': 'function'
+            }
+        }
         
-        # 使用前导入数据库模块
+        # 数据库相关设置
+        self.save_to_db = kwargs.get('save_to_db', os.getenv('SAVE_TO_DB', 'false').lower() == 'true')
         if self.save_to_db:
-            try:
-                from app.database.db_operations import DatabaseOperations
-                from app.database.db_utils import add_reasoning_column_if_not_exists
-                
-                # 检查并确保数据库表结构与模型一致
-                add_reasoning_column_if_not_exists()
-                
-                self.db_ops = DatabaseOperations
-                logger.info("数据库存储功能已启用")
-            except ImportError as e:
-                logger.warning(f"数据库模块导入失败，禁用数据库存储功能: {e}")
-                self.save_to_db = False
-            except Exception as e:
-                logger.error(f"数据库初始化错误，禁用数据库存储功能: {e}")
-                self.save_to_db = False
-
+            logger.info("启用数据库存储...")
+            self.db_ops = kwargs.get('db_ops', DatabaseOperations())
+            self.current_conversation_id = None
+            # 检查并添加reasoning列（如果不存在）
+            add_reasoning_column_if_not_exists()
+        else:
+            logger.info("数据库存储已禁用")
+            self.db_ops = None
+            
+        # 初始化客户端
+        if 'clients' in kwargs:
+            self.thinker_client = kwargs['clients'].get('thinker')
+            self.claude_client = kwargs['clients'].get('claude')
+        else:
+            logger.info("初始化思考者客户端...")
+            provider = self._get_reasoning_provider()
+            self.thinker_client = provider
+            
+            logger.info("初始化Claude客户端...")
+            self.claude_client = ClaudeClient(
+                api_key=self.claude_api_key,
+                api_url=self.claude_api_url,
+                provider=self.claude_provider
+            )
+        
+        # 验证配置有效性
+        self._validate_config()
+        
+        # 配置搜索增强
+        self.search_enabled = os.getenv('ENABLE_SEARCH_ENHANCEMENT', 'true').lower() == 'true'
+        
+        logger.info("DeepClaude服务初始化完成")
+        
     def _get_reasoning_provider(self):
         """获取思考者实例"""
         provider = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
@@ -191,268 +272,244 @@ class DeepClaude:
         else:
             return f"未知错误: {str(e)}"
 
-    async def chat_completions_with_stream(self, messages: list, **kwargs):
+    async def chat_completions_with_stream(self, messages: list, tools: list = None, tool_choice: str = "auto", **kwargs):
+        """流式对话完成，支持工具调用"""
         try:
             logger.info("开始流式处理请求...")
+            logger.debug(f"输入消息: {messages}")
             
-            # 创建或获取对话ID
-            if self.save_to_db:
-                try:
-                    # 提取用户ID（如果有的话）
-                    user_id = kwargs.get('user_id')
+            # 1. 准备参数和变量
+            chat_id = kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}")
+            created_time = kwargs.get("created_time", int(time.time()))
+            model_name = kwargs.get("model", "deepclaude")
+            has_tools = tools and len(tools) > 0
+            
+            # 验证工具配置
+            if has_tools:
+                logger.info(f"请求包含 {len(tools)} 个工具")
+                logger.info("原始工具格式:")
+                logger.info(json.dumps(tools, ensure_ascii=False))
+                
+                # 验证并转换工具
+                tools = self._validate_and_convert_tools(tools, target_format='claude-3')
+                if tools:
+                    logger.info(f"验证成功 {len(tools)} 个工具")
+                    logger.info("转换后的工具格式:")
+                    logger.info(json.dumps(tools, ensure_ascii=False))
+                else:
+                    logger.warning("没有有效的工具可用，将作为普通对话处理")
+                    has_tools = False
+                
+                logger.info(f"工具选择策略: {tool_choice}")
+            else:
+                logger.info("请求中不包含工具，将作为普通对话处理")
+            
+            # 提取原始问题
+            original_question = ""
+            if messages and messages[-1]["role"] == "user":
+                original_question = messages[-1]["content"]
+                logger.info(f"原始问题: {original_question}")
+                
+                # 分析问题是否需要工具
+                if has_tools:
+                    logger.info("分析问题是否需要工具...")
+                    need_weather = any(word in original_question.lower() for word in ["天气", "气温", "weather"])
+                    need_search = any(word in original_question.lower() for word in ["搜索", "查询", "search"])
                     
-                    # 检查是否有现有对话ID
-                    conversation_id = kwargs.get('conversation_id')
+                    if need_weather:
+                        logger.info("检测到天气查询需求")
+                    if need_search:
+                        logger.info("检测到搜索查询需求")
                     
-                    if not conversation_id:
-                        # 从最后一条消息中提取标题（取前20个字符作为对话标题）
-                        if messages and 'content' in messages[-1]:
-                            title = messages[-1]['content'][:20] + "..."
-                        else:
-                            title = None
-                            
-                        # 创建新对话
-                        self.current_conversation_id = self.db_ops.create_conversation(
-                            user_id=user_id, 
-                            title=title
-                        )
-                        logger.info(f"创建新对话，ID: {self.current_conversation_id}")
-                    else:
-                        self.current_conversation_id = conversation_id
-                        logger.info(f"使用现有对话，ID: {self.current_conversation_id}")
-                    
-                    # 保存用户问题
-                    if messages and 'content' in messages[-1]:
-                        self.db_ops.add_conversation_history(
-                            conversation_id=self.current_conversation_id,
-                            user_id=user_id,
-                            role="user",
-                            content=messages[-1]['content']
-                        )
-                        logger.info("用户问题已保存到数据库")
-                except Exception as db_e:
-                    logger.error(f"保存对话数据失败: {db_e}")
+                    if not (need_weather or need_search):
+                        logger.info("未检测到明确的工具需求")
             
-            # 获取思考者实例
-            provider = self._get_reasoning_provider()
+            # 2. 思考阶段
+            logger.info("开始思考阶段...")
+            search_enhanced = False
+            search_hint = ""
             
-            # 用于收集思考内容
-            reasoning_content = []
-            thought_complete = False
-            
-            # 记录参数信息，便于调试
-            logger.info(f"思考者提供商: {self.provider}")
-            logger.info(f"思考模式: {os.getenv('DEEPSEEK_REASONING_MODE', 'auto')}")
-            
-            # 1. 思考阶段 - 直接转发 token 并收集内容
-            try:
-                # 获取推理内容并设置重试逻辑
-                reasoning_success = False
-                is_first_reasoning = True  # 新增标记，表示是否是首次发送思考内容
-                
-                # 首先向前端发送开始思考的提示
-                yield self._format_stream_response(
-                    "开始思考问题...",
-                    content_type="reasoning",
-                    is_first_thought=True,  # 标记这是首个思考内容
-                    **kwargs
-                )
-                is_first_reasoning = False  # 发送完首个提示后设为False
-                
-                # 遍历不同的推理模式直到成功
-                for retry_count, reasoning_mode in enumerate(self.reasoning_modes):
-                    if reasoning_success:
-                        logger.info("推理成功，退出模式重试循环")
-                        break
-                        
-                    # 如果思考完成且已收集足够推理内容，直接进入回答阶段
-                    if thought_complete and len("".join(reasoning_content)) > self.min_reasoning_chars:
-                        logger.info("思考阶段已完成，退出所有重试")
-                        reasoning_success = True
-                        break
-                        
-                    if retry_count > 0:
-                        logger.info(f"尝试使用不同的推理模式: {reasoning_mode} (尝试 {retry_count+1}/{len(self.reasoning_modes)})")
-                        # 设置环境变量以更改推理模式
-                        os.environ["DEEPSEEK_REASONING_MODE"] = reasoning_mode
-                        # 重新初始化提供者，以加载新的推理模式
-                        provider = self._get_reasoning_provider()
-                        
-                        # 通知前端正在切换模式
-                        yield self._format_stream_response(
-                            f"切换思考模式: {reasoning_mode}...",
-                            content_type="reasoning",
-                            is_first_thought=False,  # 非首次思考内容
-                            **kwargs
-                        )
-                
-                    # 准备思考参数
-                    thinking_kwargs = self._prepare_thinker_kwargs(kwargs)
-                    logger.info(f"使用思考模型: {thinking_kwargs.get('model')}")
-                    
-                    # 获取推理内容
-                    try:
-                        async for content_type, content in provider.get_reasoning(
-                            messages=messages,
-                            **thinking_kwargs
-                        ):
-                            if content_type == "reasoning":
-                                # 保存思考内容
-                                reasoning_content.append(content)
-                                # 如果收集了足够多的推理内容，标记为成功
-                                if len("".join(reasoning_content)) > self.min_reasoning_chars:
-                                    reasoning_success = True
-                                # 直接转发思考 token，明确标记为推理内容
-                                yield self._format_stream_response(
-                                    content, 
-                                    content_type="reasoning",
-                                    is_first_thought=False,  # 非首次思考内容
-                                    **kwargs
-                                )
-                            elif content_type == "content":
-                                # 如果收到常规内容，说明思考阶段可能已结束
-                                logger.debug(f"收到常规内容: {content[:50]}...")
-                                thought_complete = True
-                                
-                                # 如果还没有足够的推理内容，但收到了常规内容，可以将其转化为推理内容
-                                if not reasoning_success and reasoning_mode in ['early_content', 'any_content']:
-                                    logger.info("将常规内容转化为推理内容")
-                                    reasoning_content.append(f"分析: {content}")
-                                    yield self._format_stream_response(
-                                        f"分析: {content}", 
-                                        content_type="reasoning",
-                                        is_first_thought=False,  # 非首次思考内容
-                                        **kwargs
-                                    )
-                                    
-                                # 重要: 如果已收集足够的推理内容或处于特定模式，则退出循环
-                                if len("".join(reasoning_content)) > self.min_reasoning_chars or reasoning_mode in ['early_content', 'any_content']:
-                                    logger.info("收到常规内容且已收集足够推理内容，终止推理过程")
-                                    reasoning_success = True
-                                    break
-                    except Exception as reasoning_e:
-                        logger.error(f"使用模式 {reasoning_mode} 获取推理内容时发生错误: {reasoning_e}")
-                        # 通知前端当前模式失败
-                        yield self._format_stream_response(
-                            f"思考模式 {reasoning_mode} 失败，尝试其他方式...",
-                            content_type="reasoning",
-                            is_first_thought=False,  # 非首次思考内容
-                            **kwargs
-                        )
-                        continue
-                
-                logger.info(f"思考过程{'成功' if reasoning_success else '失败'}，共收集 {len(reasoning_content)} 个思考片段")
-            except Exception as e:
-                logger.error(f"思考阶段发生错误: {e}", exc_info=True)
-                # 记录错误但继续尝试使用已收集的内容
-                yield self._format_stream_response(
-                    f"思考过程出错: {str(e)}，尝试继续...",
-                    content_type="reasoning",
-                    is_first_thought=False,  # 非首次思考内容
-                    **kwargs
-                )
-                
-            # 确保思考内容不为空且有足够的内容
-            if not reasoning_content or len("".join(reasoning_content)) < self.min_reasoning_chars:
-                logger.warning(f"未获取到足够的思考内容，当前内容长度: {len(''.join(reasoning_content))}")
-                
-                # 如果接近但不满足最小需求，仍然使用它
-                if not reasoning_content or len("".join(reasoning_content)) < self.min_reasoning_chars // 2:
-                    logger.warning("未获取到有效思考内容，使用原始问题作为替代")
-                    message_content = messages[-1]['content'] if messages and isinstance(messages[-1], dict) and 'content' in messages[-1] else "未能获取问题内容"
-                    reasoning_content = [f"问题分析：{message_content}"]
-                    # 也向用户发送提示，明确标记为推理内容
+            if has_tools and self.search_enabled and original_question:
+                search_hint = await self._enhance_with_search(original_question)
+                if search_hint:
+                    search_enhanced = True
+                    logger.info("使用搜索增强思考")
                     yield self._format_stream_response(
-                        "无法获取思考过程，将直接回答问题",
+                        f"使用搜索增强思考...\n{search_hint}",
                         content_type="reasoning",
-                        is_first_thought=True,  # 这是新的思考过程的开始
+                        is_first_thought=True,
                         **kwargs
                     )
             
-            # 进入回答阶段前发送分隔符
-            yield self._format_stream_response(
-                "\n\n---\n思考完毕，开始回答：\n\n",
-                content_type="separator",
-                is_first_thought=False,  # 非思考内容
-                **kwargs
-            )
+            if not search_enhanced:
+                yield self._format_stream_response(
+                    "开始思考问题...",
+                    content_type="reasoning",
+                    is_first_thought=True,
+                    **kwargs
+                )
             
-            # 2. 回答阶段 - 使用格式化的 prompt 并转发 token
-            full_reasoning = "\n".join(reasoning_content)
-            if 'content' in messages[-1]:
-                original_question = messages[-1]['content']
-            else:
-                logger.warning("无法从消息中获取问题内容")
-                original_question = "未提供问题内容"
-                
-            prompt = self._format_claude_prompt(
-                original_question,
-                full_reasoning
-            )
-            
-            logger.debug(f"发送给Claude的提示词: {prompt[:500]}...")
+            # 获取推理内容
+            reasoning_content = []
+            reasoning_success = False
+            thought_complete = False
+            full_reasoning = ""
             
             try:
-                answer_begun = False
-                full_answer = []  # 收集完整回答
+                provider = self._get_reasoning_provider()
+                logger.info(f"使用推理提供者: {provider.__class__.__name__}")
                 
-                async for content_type, content in self.claude_client.stream_chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    **self._prepare_answerer_kwargs(kwargs)
-                ):
-                    if content_type == "content" and content:
-                        if not answer_begun and content.strip():
-                            # 标记回答开始
-                            answer_begun = True
-                            
-                        # 收集完整回答
-                        full_answer.append(content)
+                for retry_count, reasoning_mode in enumerate(self.reasoning_modes):
+                    if reasoning_success:
+                        break
                         
-                        # 转发回答 token，明确标记为普通内容
-                        yield self._format_stream_response(
-                            content,
-                            content_type="content",
-                            is_first_thought=False,  # 非思考内容
-                            **kwargs
-                        )
-                
-                # 保存AI回答到数据库
-                if self.save_to_db and self.current_conversation_id:
+                    if retry_count > 0:
+                        logger.info(f"尝试使用不同的推理模式: {reasoning_mode}")
+                        os.environ["DEEPSEEK_REASONING_MODE"] = reasoning_mode
+                        provider = self._get_reasoning_provider()
+                    
                     try:
-                        # 获取使用的模型信息
-                        claude_model = kwargs.get('claude_model', os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'))
-                        # 估算token数量（这里只是简单估算）
-                        tokens = len(full_reasoning.split()) + len("".join(full_answer).split())
+                        async for content_type, content in provider.get_reasoning(
+                            messages=messages,
+                            **self._prepare_thinker_kwargs(kwargs)
+                        ):
+                            if content_type == "reasoning":
+                                reasoning_content.append(content)
+                                logger.debug(f"收到推理内容: {content[:50]}...")
+                                yield self._format_stream_response(
+                                    content,
+                                    content_type="reasoning",
+                                    is_first_thought=False,
+                                    **kwargs
+                                )
+                            elif content_type == "content":
+                                thought_complete = True
+                                logger.debug("推理阶段完成")
                         
-                        # 保存AI回答
-                        self.db_ops.add_conversation_history(
-                            conversation_id=self.current_conversation_id,
-                            role="ai",
-                            content="".join(full_answer),
-                            reasoning=full_reasoning,
-                            model_name=claude_model,
-                            tokens=tokens
-                        )
-                        logger.info("AI回答和思考过程已保存到数据库")
-                    except Exception as db_e:
-                        logger.error(f"保存AI回答数据失败: {db_e}")
+                        if len("".join(reasoning_content)) > self.min_reasoning_chars:
+                            reasoning_success = True
+                            logger.info("成功获取足够的推理内容")
+                    except Exception as e:
+                        logger.error(f"推理获取失败 (模式: {reasoning_mode}): {e}")
+                        
+                        if retry_count == len(self.reasoning_modes) - 1:
+                            error_message = await self._handle_api_error(e)
+                            logger.error(f"所有推理模式都失败: {error_message}")
+                            yield self._format_stream_response(
+                                f"思考过程中遇到错误: {error_message}",
+                                content_type="error",
+                                is_first_thought=False,
+                                **kwargs
+                            )
                 
-            except Exception as e:
-                logger.error(f"回答阶段发生错误: {e}", exc_info=True)
+                full_reasoning = "\n".join(reasoning_content)
+                logger.info(f"推理内容长度: {len(full_reasoning)} 字符")
+                
+                if search_hint:
+                    full_reasoning = f"{search_hint}\n\n{full_reasoning}"
+                    logger.debug("已添加搜索提示到推理内容")
+                
+                # 3. 工具调用阶段
+                if has_tools and reasoning_success:
+                    logger.info(f"开始工具调用决策 - 工具数量: {len(tools)}")
+                    
+                    # 决定是否需要使用工具
+                    decision_prompt = self._format_tool_decision_prompt(
+                        original_question=original_question,
+                        reasoning=full_reasoning,
+                        tools=tools
+                    )
+                    logger.debug(f"工具决策提示: {decision_prompt[:200]}...")
+                    
+                    # 向Claude发送决策请求
+                    tool_decision_response = await self.claude_client.chat(
+                        messages=[{"role": "user", "content": decision_prompt}],
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        **self._prepare_answerer_kwargs(kwargs)
+                    )
+                    
+                    # 如果决定使用工具，返回工具调用响应
+                    if "tool_calls" in tool_decision_response.get("choices", [{}])[0].get("message", {}):
+                        tool_calls = tool_decision_response["choices"][0]["message"]["tool_calls"]
+                        if tool_calls:
+                            tool_names = [t.get("function", {}).get("name", "未知工具") for t in tool_calls]
+                            logger.info(f"工具调用决策结果: 使用工具 {', '.join(tool_names)}")
+                            
+                            for tool_call in tool_calls:
+                                logger.info(f"生成工具调用响应: {tool_call.get('function', {}).get('name', '未知工具')}")
+                                yield self._format_tool_call_response(
+                                    tool_call=tool_call,
+                                    chat_id=chat_id,
+                                    created_time=created_time,
+                                    model=model_name
+                                )
+                            
+                            logger.info("工具调用流程结束，等待客户端执行工具")
+                            yield b'data: [DONE]\n\n'
+                            return
+                        else:
+                            logger.info("工具调用决策结果: 不使用工具")
+                    else:
+                        logger.info("工具调用决策结果: 不使用工具")
+                
+                # 4. 回答阶段
+                logger.info("开始生成最终回答...")
                 yield self._format_stream_response(
-                    f"\n\n⚠️ 获取回答时发生错误: {str(e)}",
-                    content_type="error",
-                    is_first_thought=False,  # 非思考内容
+                    "\n\n---\n思考完毕，开始回答：\n\n",
+                    content_type="separator",
+                    is_first_thought=False,
                     **kwargs
                 )
                 
-        except Exception as e:
-            error_msg = await self._handle_api_error(e)
-            logger.error(f"流式处理错误: {error_msg}", exc_info=True)
+                # 构造Claude的输入消息
+                combined_content = f"""
+这是我自己基于问题的思考过程:\n{full_reasoning}\n\n
+上面是我自己的思考过程不一定完全正确请借鉴思考过程和期中你也认为正确的部分（1000% 权重）
+，现在请给出详细和细致的答案，不要省略步骤和步骤细节
+，要分解原题确保你理解了原题的每个部分，也要掌握整体意思
+，最佳质量（1000% 权重），最详细解答（1000% 权重），不要回答太简单让我能参考一步步应用（1000% 权重）:"""
+                
+                claude_messages = [{"role": "user", "content": combined_content}]
+                logger.debug("向Claude发送最终提示")
+                
+                # 流式获取Claude回答
+                answer_content = []
+                async for content_type, content in self.claude_client.stream_chat(
+                    messages=claude_messages,
+                    **self._prepare_answerer_kwargs(kwargs)
+                ):
+                    if content_type in ["answer", "content"]:
+                        answer_content.append(content)
+                        logger.debug(f"收到回答内容: {content[:50]}...")
+                        yield self._format_stream_response(
+                            content,
+                            content_type="content",
+                            is_first_thought=False,
+                            **kwargs
+                        )
+                
+                logger.info("回答生成完成")
+                
+                # 发送流式响应结束标志
+                yield b'data: [DONE]\n\n'
+                
+            except Exception as e:
+                logger.error(f"流式处理过程中出错: {e}", exc_info=True)
+                error_message = await self._handle_api_error(e)
+                yield self._format_stream_response(
+                    f"处理请求时出错: {error_message}",
+                    content_type="error",
+                    is_first_thought=False,
+                    **kwargs
+                )
+                
+        except Exception as outer_e:
+            logger.error(f"流式处理外层错误: {outer_e}", exc_info=True)
             yield self._format_stream_response(
-                f"错误: {error_msg}", 
+                f"服务器错误: {str(outer_e)}",
                 content_type="error",
-                is_first_thought=False,  # 非思考内容
+                is_first_thought=False,
                 **kwargs
             )
 
@@ -468,11 +525,11 @@ class DeepClaude:
             model = os.getenv('DEEPSEEK_MODEL', 'deepseek-reasoner')
             
             # 根据provider进行特定处理
-            if self.provider == 'deepseek':
+            if provider_type == 'deepseek':
                 model = 'deepseek-reasoner'  # 使用确定可用的模型
-            elif self.provider == 'siliconflow':
+            elif provider_type == 'siliconflow':
                 model = 'deepseek-ai/DeepSeek-R1'
-            elif self.provider == 'nvidia':
+            elif provider_type == 'nvidia':
                 model = 'deepseek-ai/deepseek-r1'
             
         return {
@@ -522,14 +579,19 @@ class DeepClaude:
         self,
         messages: list,
         model_arg: tuple[float, float, float, float],
+        tools: list = None,
+        tool_choice: str = "auto",
         deepseek_model: str = "deepseek-reasoner",
-        claude_model: str = os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219')
+        claude_model: str = os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'),
+        **kwargs
     ) -> dict:
         """非流式对话完成
         
         Args:
             messages: 对话消息列表
             model_arg: 模型参数元组
+            tools: 工具列表
+            tool_choice: 工具选择策略
             deepseek_model: DeepSeek 模型名称
             claude_model: Claude 模型名称
             
@@ -601,57 +663,126 @@ class DeepClaude:
         
         logger.debug(f"获取到推理内容: {reasoning[:min(500, len(reasoning))]}...")
         
-        # 2. 构造 Claude 的输入消息
-        combined_content = f"""
+        original_question = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
+        has_tool_decision = False
+        tool_calls = []
+        
+        # 如果提供了工具参数，确定是否需要使用工具
+        if tools and len(tools) > 0:
+            try:
+                # 如果启用了搜索增强，可以添加提示
+                search_hint = ""
+                if self.search_enabled and messages and messages[-1]["role"] == "user":
+                    search_hint = await self._enhance_with_search(messages[-1]["content"])
+                    if search_hint:
+                        reasoning = f"{search_hint}\n\n{reasoning}"
+                
+                # 针对工具的决策提示
+                decision_prompt = self._format_tool_decision_prompt(original_question, reasoning, tools)
+                logger.debug(f"工具决策提示: {decision_prompt[:200]}...")
+                
+                # 向Claude发送决策请求
+                tool_decision_response = await self.claude_client.chat(
+                    messages=[{"role": "user", "content": decision_prompt}],
+                    model=claude_model,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    model_arg=model_arg
+                )
+                
+                # 如果Claude决定使用工具，返回工具调用响应
+                if "tool_calls" in tool_decision_response:
+                    tool_calls = tool_decision_response.get("tool_calls", [])
+                    has_tool_decision = True
+                    logger.info(f"Claude决定使用工具: {len(tool_calls)}个工具调用")
+                    
+                    # 构造OpenAI格式的响应
+                    response = {
+                        "id": f"chatcmpl-{uuid.uuid4()}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": kwargs.get("model", "deepclaude"),
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": tool_calls
+                            },
+                            "finish_reason": "tool_calls"
+                        }]
+                    }
+                    
+                    return response
+            except Exception as tool_e:
+                logger.error(f"工具调用流程失败: {tool_e}")
+                # 如果工具调用失败，回退到普通回答
+        
+        # 如果没有工具调用或决策不使用工具，生成普通回答
+        if not has_tool_decision:
+            # 构造 Claude 的输入消息
+            combined_content = f"""
 这是我自己基于问题的思考过程:\n{reasoning}\n\n
 上面是我自己的思考过程不一定完全正确请借鉴思考过程和期中你也认为正确的部分（1000% 权重）
 ，现在请给出详细和细致的答案，不要省略步骤和步骤细节
 ，要分解原题确保你理解了原题的每个部分，也要掌握整体意思
 ，最佳质量（1000% 权重），最详细解答（1000% 权重），不要回答太简单让我能参考一步步应用（1000% 权重）:"""
-        
-        claude_messages = [{"role": "user", "content": combined_content}]
-        
-        # 3. 获取 Claude 回答
-        logger.info("正在获取 Claude 回答...")
-        try:
-            full_content = ""
-            async for content_type, content in self.claude_client.stream_chat(
-                messages=claude_messages,
-                model_arg=model_arg,
-                model=claude_model,
-                stream=False
-            ):
-                if content_type in ["answer", "content"]:
-                    logger.debug(f"获取到 Claude 回答: {content}")
-                    full_content += content
             
-            # 保存AI回答到数据库
-            if self.save_to_db and self.current_conversation_id:
-                try:
-                    # 估算token数量
-                    tokens = len(reasoning.split()) + len(full_content.split())
-                    
-                    # 保存AI回答
-                    self.db_ops.add_conversation_history(
-                        conversation_id=self.current_conversation_id,
-                        role="ai",
-                        content=full_content,
-                        reasoning=reasoning,
-                        model_name=claude_model,
-                        tokens=tokens
-                    )
-                    logger.info("AI回答和思考过程已保存到数据库")
-                except Exception as db_e:
-                    logger.error(f"保存AI回答数据失败: {db_e}")
+            claude_messages = [{"role": "user", "content": combined_content}]
             
-            # 返回完整的回答内容
-            return {
-                "content": full_content,
-                "role": "assistant"
-            }
-        except Exception as e:
-            logger.error(f"获取 Claude 回答失败: {e}")
-            raise
+            # 3. 获取 Claude 回答
+            logger.info("正在获取 Claude 回答...")
+            try:
+                full_content = ""
+                async for content_type, content in self.claude_client.stream_chat(
+                    messages=claude_messages,
+                    model_arg=model_arg,
+                    model=claude_model,
+                    stream=False
+                ):
+                    if content_type in ["answer", "content"]:
+                        logger.debug(f"获取到 Claude 回答: {content}")
+                        full_content += content
+                
+                # 保存AI回答到数据库
+                if self.save_to_db and self.current_conversation_id:
+                    try:
+                        # 估算token数量
+                        tokens = len(reasoning.split()) + len(full_content.split())
+                        
+                        # 保存AI回答
+                        self.db_ops.add_conversation_history(
+                            conversation_id=self.current_conversation_id,
+                            role="ai",
+                            content=full_content,
+                            reasoning=reasoning,
+                            model_name=claude_model,
+                            tokens=tokens
+                        )
+                        logger.info("AI回答和思考过程已保存到数据库")
+                    except Exception as db_e:
+                        logger.error(f"保存AI回答数据失败: {db_e}")
+                
+                # 返回OpenAI格式的响应
+                response = {
+                    "id": f"chatcmpl-{uuid.uuid4()}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": kwargs.get("model", "deepclaude"),
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": full_content
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }
+                
+                return response
+            except Exception as e:
+                logger.error(f"获取 Claude 回答失败: {e}")
+                raise
 
     async def _get_reasoning_content(self, messages: list, model: str, **kwargs) -> str:
         """获取推理内容
@@ -872,24 +1003,33 @@ class DeepClaude:
         """验证配置的完整性"""
         provider = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
         
+        # 检查provider是否在支持列表中
+        if provider not in self.reasoning_providers:
+            raise ValueError(f"不支持的推理提供者: {provider}")
+            
+        # 针对不同提供者进行验证
         if provider == 'deepseek':
-            if not self.deepseek_api_key:
+            if not os.getenv('DEEPSEEK_API_KEY'):
                 raise ValueError("使用 DeepSeek 时必须提供 API KEY")
-            if not self.deepseek_api_url:
+            if not os.getenv('DEEPSEEK_API_URL'):
                 raise ValueError("使用 DeepSeek 时必须提供 API URL")
         elif provider == 'ollama':
-            if not self.ollama_api_url:
+            if not os.getenv('OLLAMA_API_URL'):
                 raise ValueError("使用 Ollama 时必须提供 API URL")
         elif provider == 'siliconflow':
-            if not self.deepseek_api_key:
+            if not os.getenv('DEEPSEEK_API_KEY'):
                 raise ValueError("使用 硅基流动 时必须提供 DeepSeek API KEY")
-            if not self.deepseek_api_url:
+            if not os.getenv('DEEPSEEK_API_URL'):
                 raise ValueError("使用 硅基流动 时必须提供 DeepSeek API URL")
         elif provider == 'nvidia':
-            if not self.deepseek_api_key:
+            if not os.getenv('DEEPSEEK_API_KEY'):
                 raise ValueError("使用 NVIDIA 时必须提供 DeepSeek API KEY")
-            if not self.deepseek_api_url:
+            if not os.getenv('DEEPSEEK_API_URL'):
                 raise ValueError("使用 NVIDIA 时必须提供 DeepSeek API URL")
+                
+        # 验证Claude配置
+        if not os.getenv('CLAUDE_API_KEY'):
+            raise ValueError("必须提供 CLAUDE_API_KEY 环境变量")
 
     def _format_stream_response(self, content: str, content_type: str = "content", **kwargs) -> bytes:
         """格式化流式响应
@@ -974,3 +1114,413 @@ class DeepClaude:
         
         # 或者使用更复杂的分词算法
         # return some_tokenizer(text)
+
+    # 搜索增强函数
+    async def _enhance_with_search(self, query: str) -> str:
+        """使用搜索增强查询，获取最新信息
+        注意：实际搜索操作应由Dify执行，这里仅返回提示文本
+        
+        Args:
+            query: 用户查询内容
+            
+        Returns:
+            str: 搜索结果提示文本
+        """
+        if not self.search_enabled:
+            logger.info("搜索增强功能未启用")
+            return ""
+        
+        logger.info(f"建议使用搜索增强查询: {query}")
+        return "建议使用搜索工具获取最新信息。"
+    
+    async def _handle_tool_results(self, original_question: str, reasoning: str, 
+                                   tool_calls: List[Dict], tool_results: List[Dict], **kwargs) -> str:
+        """处理工具调用结果并生成最终回答
+        
+        Args:
+            original_question: 原始用户问题
+            reasoning: 推理内容
+            tool_calls: 工具调用列表
+            tool_results: 工具调用结果列表
+            **kwargs: 其他参数
+            
+        Returns:
+            str: 最终回答
+        """
+        logger.info(f"处理工具调用结果 - 工具数: {len(tool_calls)}, 结果数: {len(tool_results)}")
+        
+        # 构建工具调用及结果的详细描述
+        tools_info = ""
+        for i, (tool_call, tool_result) in enumerate(zip(tool_calls, tool_results), 1):
+            func = tool_call.get("function", {})
+            tool_name = func.get("name", "未知工具")
+            tool_args = func.get("arguments", "{}")
+            
+            # 尝试解析参数为更可读的格式
+            try:
+                args_dict = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
+                args_str = json.dumps(args_dict, ensure_ascii=False, indent=2)
+            except:
+                args_str = str(tool_args)
+                
+            # 处理结果
+            result_content = tool_result.get("content", "")
+            
+            tools_info += f"""
+工具 {i}: {tool_name}
+参数:
+{args_str}
+
+结果:
+{result_content}
+"""
+
+        # 构建完整提示
+        prompt = f"""请根据以下信息生成一个完整、准确的回答：
+
+用户问题: {original_question}
+
+思考过程:
+{reasoning}
+
+工具调用结果:
+{tools_info}
+
+要求：
+1. 直接使用工具返回的数据回答问题
+2. 确保回答完全解决用户的问题
+3. 使用清晰、易懂的语言
+4. 如果工具结果不完整或有错误，要说明情况
+5. 回答要有逻辑性和连贯性
+6. 必要时可以结合多个工具的结果"""
+        
+        logger.info("向Claude发送工具结果提示生成最终回答")
+        
+        # 向Claude发送请求生成最终回答
+        response = await self.claude_client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            **self._prepare_answerer_kwargs(kwargs)
+        )
+        
+        if "choices" in response and response["choices"]:
+            answer = response["choices"][0]["message"]["content"]
+            logger.info(f"生成最终回答成功: {answer[:100]}...")
+            return answer
+        else:
+            logger.warning("生成最终回答失败")
+            return "抱歉，无法处理工具调用结果。"
+
+    def _format_tool_decision_prompt(self, original_question: str, reasoning: str, tools: List[Dict]) -> str:
+        """格式化工具决策提示，用于Claude判断是否需要使用工具
+        
+        Args:
+            original_question: 原始用户问题
+            reasoning: 推理内容
+            tools: 可用工具列表
+            
+        Returns:
+            str: 格式化的提示文本
+        """
+        # 提取工具描述
+        tools_description = ""
+        for i, tool in enumerate(tools, 1):
+            if "function" in tool:
+                function = tool["function"]
+                name = function.get("name", "未命名工具")
+                description = function.get("description", "无描述")
+                
+                # 提取参数信息
+                parameters = function.get("parameters", {})
+                required = parameters.get("required", [])
+                properties = parameters.get("properties", {})
+                
+                param_desc = ""
+                for param_name, param_info in properties.items():
+                    is_required = "必填" if param_name in required else "可选"
+                    param_type = param_info.get("type", "未知类型")
+                    param_description = param_info.get("description", "无描述")
+                    param_desc += f"  - {param_name} ({param_type}, {is_required}): {param_description}\n"
+                
+                tools_description += f"{i}. 工具名称: {name}\n   描述: {description}\n   参数:\n{param_desc}\n"
+        
+        # 构造决策提示
+        prompt = f"""你是一个工具调用决策专家。请分析用户问题和推理内容，判断是否需要使用工具获取额外信息。
+
+用户问题: {original_question}
+
+推理内容:
+{reasoning}
+
+可用工具:
+{tools_description}
+
+判断标准:
+1. 如果问题需要实时数据（如天气、搜索等），必须使用相应工具
+2. 如果问题是关于常识或可以通过推理解决，则不需要工具
+3. 如果推理内容已提供足够信息，则不需要工具
+
+如果需要使用工具，请直接返回工具调用请求，格式如下：
+{{
+  "tool_calls": [
+    {{
+      "id": "call_xxxxx",  // 8位唯一ID
+      "type": "function",
+      "function": {{
+        "name": "工具名称",
+        "arguments": {{
+          // 具体参数
+        }}
+      }}
+    }}
+  ]
+}}
+
+注意事项:
+1. 只在确实需要额外信息时才使用工具
+2. 参数值必须是具体的值，不要使用占位符
+3. 必须提供所有必填参数
+4. 参数值要符合实际场景，如城市名、日期等
+5. 工具调用ID必须是唯一的8位字符串
+6. 返回的必须是有效的JSON格式"""
+        
+        logger.info(f"生成工具决策提示 - 问题: '{original_question[:30]}...'")
+        return prompt
+
+    def _format_tool_call_response(self, tool_call: Dict, **kwargs) -> bytes:
+        """格式化工具调用响应，确保完全符合OpenAI API规范
+        
+        Args:
+            tool_call: 工具调用信息
+            **kwargs: 其他参数
+            
+        Returns:
+            bytes: 格式化的SSE响应
+        """
+        try:
+            # 确保工具调用ID存在且格式正确
+            tool_call_id = tool_call.get("id")
+            if not tool_call_id or not isinstance(tool_call_id, str) or len(tool_call_id) < 8:
+                tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
+            
+            # 确保函数名和参数格式正确
+            function = tool_call.get("function", {})
+            function_name = function.get("name", "")
+            function_args = function.get("arguments", "{}")
+            
+            # 如果参数不是字符串格式，转换为正确的JSON字符串
+            if not isinstance(function_args, str):
+                try:
+                    function_args = json.dumps(function_args, ensure_ascii=False)
+                except Exception as e:
+                    logger.error(f"参数序列化失败: {e}")
+                    function_args = "{}"
+            
+            # 构造标准的OpenAI API响应格式
+            response = {
+                "id": kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}"),
+                "object": "chat.completion.chunk",
+                "created": kwargs.get("created_time", int(time.time())),
+                "model": kwargs.get("model", "deepclaude"),
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": function_name,
+                                    "arguments": function_args
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            }
+            
+            logger.info(f"工具调用响应格式化完成 - 工具: {function_name}, ID: {tool_call_id}")
+            return f"data: {json.dumps(response, ensure_ascii=False)}\n\n".encode('utf-8')
+            
+        except Exception as e:
+            logger.error(f"工具调用响应格式化失败: {e}")
+            # 返回一个错误响应
+            error_response = {
+                "id": kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}"),
+                "object": "chat.completion.chunk",
+                "created": kwargs.get("created_time", int(time.time())),
+                "model": kwargs.get("model", "deepclaude"),
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": f"工具调用失败: {str(e)}"
+                    },
+                    "finish_reason": "error"
+                }]
+            }
+            return f"data: {json.dumps(error_response, ensure_ascii=False)}\n\n".encode('utf-8')
+    
+    def _format_tool_result_response(self, tool_result: Dict, **kwargs) -> bytes:
+        """格式化工具结果响应，用于流式输出
+        
+        Args:
+            tool_result: 工具执行结果
+            **kwargs: 其他参数
+            
+        Returns:
+            bytes: 格式化的SSE响应
+        """
+        try:
+            # 验证工具结果格式
+            if not isinstance(tool_result, dict):
+                raise ValueError("工具结果必须是字典格式")
+            
+            tool_call_id = tool_result.get("tool_call_id")
+            if not tool_call_id:
+                raise ValueError("工具结果必须包含tool_call_id")
+            
+            content = tool_result.get("content")
+            if content is None:
+                raise ValueError("工具结果必须包含content")
+            
+            # 构造标准的OpenAI API响应格式
+            response = {
+                "id": kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}"),
+                "object": "chat.completion.chunk",
+                "created": kwargs.get("created_time", int(time.time())),
+                "model": kwargs.get("model", "deepclaude"),
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "tool",
+                        "content": content,
+                        "tool_call_id": tool_call_id
+                    },
+                    "finish_reason": None
+                }]
+            }
+            
+            logger.info(f"工具结果响应格式化完成 - ID: {tool_call_id}")
+            return f"data: {json.dumps(response, ensure_ascii=False)}\n\n".encode('utf-8')
+            
+        except Exception as e:
+            logger.error(f"工具结果响应格式化失败: {e}")
+            # 返回一个错误响应
+            error_response = {
+                "id": kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}"),
+                "object": "chat.completion.chunk",
+                "created": kwargs.get("created_time", int(time.time())),
+                "model": kwargs.get("model", "deepclaude"),
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": f"工具结果处理失败: {str(e)}"
+                    },
+                    "finish_reason": "error"
+                }]
+            }
+            return f"data: {json.dumps(error_response, ensure_ascii=False)}\n\n".encode('utf-8')
+
+    def _validate_tool(self, tool: Dict) -> Tuple[bool, str, Optional[Dict]]:
+        """验证工具格式并尝试修复
+        
+        Args:
+            tool: 工具配置字典
+            
+        Returns:
+            Tuple[bool, str, Optional[Dict]]: 
+                - 是否有效
+                - 错误信息
+                - 修复后的工具配置（如果可以修复）
+        """
+        if not isinstance(tool, dict):
+            return False, f"工具必须是字典格式，当前类型: {type(tool)}", None
+            
+        # 检查必要字段
+        if "function" not in tool and "type" not in tool:
+            return False, "工具缺少必要字段 'function' 或 'type'", None
+            
+        # 如果是 type 格式，尝试转换为 function 格式
+        if "type" in tool and tool["type"] in ["function", "tool"]:
+            function_field = "function" if tool["type"] == "function" else "parameters"
+            if function_field in tool:
+                tool = {
+                    "function": tool[function_field]
+                }
+                
+        # 验证 function 字段
+        function = tool.get("function", {})
+        if not isinstance(function, dict):
+            return False, f"function 必须是字典格式，当前类型: {type(function)}", None
+            
+        # 检查必要的 function 字段
+        if "name" not in function:
+            return False, "function 缺少必要字段 'name'", None
+            
+        # 验证参数格式
+        parameters = function.get("parameters", {})
+        if not isinstance(parameters, dict):
+            return False, f"parameters 必须是字典格式，当前类型: {type(parameters)}", None
+            
+        # 尝试修复常见问题
+        fixed_tool = {
+            "function": {
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
+                "parameters": {
+                    "type": parameters.get("type", "object"),
+                    "properties": parameters.get("properties", {}),
+                    "required": parameters.get("required", [])
+                }
+            }
+        }
+        
+        return True, "", fixed_tool
+        
+    def _validate_and_convert_tools(self, tools: List[Dict], target_format: str = 'claude-3') -> List[Dict]:
+        """验证并转换工具列表
+        
+        Args:
+            tools: 原始工具列表
+            target_format: 目标格式
+            
+        Returns:
+            List[Dict]: 验证并转换后的工具列表
+        """
+        if not tools:
+            return []
+            
+        valid_tools = []
+        for tool in tools:
+            # 验证工具格式
+            is_valid, error_msg, fixed_tool = self._validate_tool(tool)
+            if not is_valid:
+                logger.warning(f"工具验证失败: {error_msg}")
+                continue
+                
+            tool_to_use = fixed_tool or tool
+            
+            # 检查工具是否在支持列表中
+            func = tool_to_use.get("function", {})
+            if func.get("name") in self.supported_tools:
+                # 转换为目标格式
+                format_config = self.tool_format_mapping.get(target_format)
+                if format_config:
+                    converted_tool = {
+                        'type': format_config['type'],
+                        format_config['function_field']: func
+                    }
+                    valid_tools.append(converted_tool)
+                    logger.info(f"工具 {func.get('name')} 验证成功并转换为 {target_format} 格式")
+                else:
+                    valid_tools.append(tool_to_use)
+                    logger.info(f"工具 {func.get('name')} 验证成功，保持原始格式")
+            else:
+                logger.warning(f"工具 {func.get('name')} 不在支持列表中")
+                
+        return valid_tools

@@ -4,6 +4,7 @@ import sys  # 用于系统相关功能，如程序退出
 from dotenv import load_dotenv  # 用于加载.env文件中的环境变量
 import uuid
 import time
+import json
 
 # 加载环境变量配置
 # 从.env文件中读取配置，支持本地开发环境和生产环境的配置分离
@@ -51,6 +52,7 @@ app = FastAPI(title="DeepClaude API")
 - GET /: 服务健康检查
 - GET /v1/models: 获取支持的模型列表
 - POST /v1/chat/completions: 处理聊天补全请求
+- POST /test_tool_call: 测试工具调用功能
 
 环境变量配置：
 - ALLOW_ORIGINS: CORS允许的源，多个源用逗号分隔
@@ -219,19 +221,49 @@ async def list_models():
 async def chat_completions(request: Request):
     try:
         data = await request.json()
+        logger.info("收到完整的请求数据:")
+        logger.info(f"模型名称: {data.get('model', 'unknown')}")
+        logger.info(f"消息数量: {len(data.get('messages', []))}")
+        logger.info(f"是否流式: {data.get('stream', False)}")
+        logger.info(f"完整请求数据: {json.dumps(data, ensure_ascii=False)}")
         
         # 验证必要参数
         if "messages" not in data:
             raise ValueError("Missing messages parameter")
             
+        # 提取工具相关参数，添加详细日志
+        tools = data.get("tools", [])
+        tool_choice = data.get("tool_choice", "auto")
+        
+        # 记录工具调用请求信息
+        if tools:
+            logger.info(f"收到工具调用请求，包含 {len(tools)} 个工具")
+            for tool in tools:
+                if isinstance(tool, dict) and "function" in tool:
+                    func = tool["function"]
+                    logger.info(f"工具名称: {func.get('name', '未命名工具')}")
+                    logger.info(f"工具描述: {func.get('description', '无描述')}")
+                    logger.debug(f"工具详情: {json.dumps(tool, ensure_ascii=False)}")
+                else:
+                    logger.warning(f"收到无效的工具定义: {tool}")
+            logger.info(f"工具选择策略: {tool_choice}")
+        else:
+            logger.warning("请求中不包含工具，这可能是因为:")
+            logger.warning("1. Dify 没有正确配置工具")
+            logger.warning("2. 工具配置没有正确传递到请求中")
+            logger.warning("3. 工具参数在传递过程中丢失")
+            logger.warning("请检查 Dify 工具配置和请求数据")
+            
         if data.get("stream", False):
-            # 设置完整的 SSE 响应头
+            logger.info("使用流式响应处理工具调用")
             return StreamingResponse(
                 deep_claude.chat_completions_with_stream(
                     messages=data["messages"],
                     chat_id=f"chatcmpl-{uuid.uuid4()}",
                     created_time=int(time.time()),
-                    model=data.get("model", "deepclaude")
+                    model=data.get("model", "deepclaude"),
+                    tools=tools,
+                    tool_choice=tool_choice
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -244,11 +276,28 @@ async def chat_completions(request: Request):
                 }
             )
         else:
-            # 处理非流式请求
+            logger.info("使用非流式响应处理工具调用")
             response = await deep_claude.chat_completions_without_stream(
                 messages=data["messages"],
-                model_arg=get_and_validate_params(data)
+                model_arg=get_and_validate_params(data),
+                tools=tools,
+                tool_choice=tool_choice
             )
+            
+            # 记录工具调用响应
+            if "choices" in response and response["choices"]:
+                choice = response["choices"][0]
+                if "tool_calls" in choice.get("message", {}):
+                    tool_calls = choice["message"]["tool_calls"]
+                    logger.info(f"工具调用响应包含 {len(tool_calls)} 个工具调用")
+                    for tool_call in tool_calls:
+                        if isinstance(tool_call, dict) and "function" in tool_call:
+                            func = tool_call["function"]
+                            logger.info(f"调用工具: {func.get('name', '未知工具')}")
+                            logger.debug(f"工具调用参数: {func.get('arguments', '{}')}")
+                else:
+                    logger.info("响应中不包含工具调用")
+            
             return JSONResponse(content=response)
             
     except ValueError as e:
@@ -295,3 +344,121 @@ def get_and_validate_params(body: dict) -> tuple:
             raise ValueError("Sonnet 设定 temperature 必须在 0 到 1 之间")
 
     return (temperature, top_p, presence_penalty, frequency_penalty, stream)
+
+@app.post("/test_tool_call")
+async def test_tool_call(request: Request):
+    """测试工具调用功能的端点"""
+    try:
+        data = await request.json()
+        messages = data.get("messages", [{"role": "user", "content": "今天北京天气怎么样？"}])
+        
+        # 定义测试工具
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "获取指定城市的天气信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "城市名称，如北京、上海等"
+                        },
+                        "date": {
+                            "type": "string", 
+                            "description": "日期，默认为今天",
+                            "enum": ["today", "tomorrow", "day_after_tomorrow"]
+                        }
+                    },
+                    "required": ["location"]
+                }
+            }
+        }]
+        
+        logger.info("开始测试工具调用 - 步骤1: 生成工具调用请求")
+        
+        # 第一步: 获取推理内容
+        reasoning = await deep_claude._get_reasoning_content(
+            messages=messages,
+            model="deepseek-reasoner",
+            model_arg=(0.7, 0.9, 0, 0)
+        )
+        
+        logger.info(f"测试工具调用 - 步骤2: 获取到推理内容 ({len(reasoning)} 字符)")
+        
+        # 第二步: 获取工具调用决策
+        original_question = messages[-1]["content"] if messages else ""
+        decision_prompt = deep_claude._format_tool_decision_prompt(original_question, reasoning, tools)
+        
+        logger.info(f"测试工具调用 - 步骤3: 发送工具决策请求到Claude (提示长度: {len(decision_prompt)})")
+        
+        tool_decision = await deep_claude.claude_client.chat(
+            messages=[{"role": "user", "content": decision_prompt}],
+            tools=tools,
+            tool_choice="auto",
+            model=os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219')
+        )
+        
+        logger.info(f"测试工具调用 - 步骤4: 收到Claude工具决策响应: {json.dumps(tool_decision)[:200]}...")
+        
+        # 第三步: 检查是否需要调用工具
+        if "tool_calls" in tool_decision and tool_decision["tool_calls"]:
+            tool_calls = tool_decision["tool_calls"]
+            
+            # 模拟工具调用
+            logger.info(f"测试工具调用 - 步骤5: 决定使用 {len(tool_calls)} 个工具")
+            
+            # 构造工具响应
+            tool_results = []
+            for tool_call in tool_calls:
+                func = tool_call.get("function", {})
+                name = func.get("name", "")
+                args = json.loads(func.get("arguments", "{}"))
+                
+                logger.info(f"测试工具调用 - 工具名称: {name}, 参数: {args}")
+                
+                # 模拟工具执行结果
+                if name == "get_weather":
+                    location = args.get("location", "")
+                    date = args.get("date", "today")
+                    result = {
+                        "content": f"{location}今天天气晴朗，气温20-25度，适合外出活动。",
+                        "tool_call_id": tool_call.get("id", "")
+                    }
+                    tool_results.append(result)
+            
+            # 第四步: 处理工具结果
+            logger.info("测试工具调用 - 步骤6: 处理工具结果")
+            final_answer = await deep_claude._handle_tool_results(
+                original_question=original_question,
+                reasoning=reasoning,
+                tool_calls=tool_calls,
+                tool_results=tool_results
+            )
+            
+            logger.info("测试工具调用 - 步骤7: 生成最终回答")
+            return {
+                "success": True,
+                "steps": {
+                    "reasoning": reasoning,
+                    "tool_decision": tool_decision,
+                    "tool_results": tool_results,
+                    "final_answer": final_answer
+                }
+            }
+        else:
+            logger.info("测试工具调用 - Claude决定不使用工具")
+            return {
+                "success": True,
+                "message": "Claude决定不使用工具",
+                "reasoning": reasoning,
+                "tool_decision": tool_decision
+            }
+            
+    except Exception as e:
+        logger.error(f"工具调用测试失败: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e)
+        }

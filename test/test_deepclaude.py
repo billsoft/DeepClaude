@@ -65,32 +65,21 @@ async def test_deepclaude_init():
     logger.info("开始测试DeepClaude初始化...")
     
     try:
-        # 创建DeepClaude实例
+        # 创建DeepClaude实例 - 使用新的初始化方式
         deepclaude = DeepClaude(
-            # Claude配置
-            claude_api_key=CLAUDE_API_KEY,
-            claude_api_url=CLAUDE_API_URL,
-            claude_provider=CLAUDE_PROVIDER,
-            
-            # DeepSeek配置
-            deepseek_api_key=DEEPSEEK_API_KEY,
-            deepseek_api_url=DEEPSEEK_API_URL,
-            deepseek_provider=DEEPSEEK_PROVIDER,
-            
-            # Ollama配置
-            ollama_api_url=OLLAMA_API_URL,
-            
-            # 思考格式配置
-            is_origin_reasoning=IS_ORIGIN_REASONING
+            # 启用增强推理
+            enable_enhanced_reasoning=True,
+            # 不启用数据库存储
+            save_to_db=False
         )
         
         # 验证实例属性
         assert deepclaude.claude_client is not None, "Claude客户端初始化失败"
-        assert deepclaude.deepseek_api_key == DEEPSEEK_API_KEY, "DeepSeek API KEY设置错误"
-        assert 'deepseek' in deepclaude.reasoning_providers, "推理提供者配置错误"
-        assert 'ollama' in deepclaude.reasoning_providers, "推理提供者配置错误"
-        assert 'siliconflow' in deepclaude.reasoning_providers, "推理提供者配置错误"
-        assert 'nvidia' in deepclaude.reasoning_providers, "推理提供者配置错误"
+        assert hasattr(deepclaude, 'thinker_client'), "思考者客户端初始化失败"
+        assert deepclaude.min_reasoning_chars > 0, "推理字符数设置错误"
+        assert len(deepclaude.reasoning_modes) > 0, "推理模式列表为空"
+        assert isinstance(deepclaude.search_enabled, bool), "搜索增强配置错误"
+        assert "tavily_search" in deepclaude.supported_tools, "工具支持配置错误"
         
         logger.info("DeepClaude初始化测试通过!")
         return deepclaude
@@ -154,6 +143,69 @@ async def test_non_stream_output(deepclaude):
         logger.info("DeepClaude非流式输出测试通过!")
     except Exception as e:
         logger.error(f"DeepClaude非流式输出测试失败: {e}", exc_info=True)
+        raise
+
+async def test_non_stream_output_with_tools(deepclaude):
+    """测试DeepClaude非流式输出的工具调用功能"""
+    logger.info("开始测试DeepClaude非流式输出工具调用...")
+    
+    # 定义测试工具
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "获取特定位置的天气信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "城市名称，如北京、上海等"
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                            "description": "温度单位"
+                        }
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
+    ]
+    
+    # 查询天气的测试消息
+    weather_messages = [
+        {"role": "user", "content": "北京今天的天气怎么样？"}
+    ]
+    
+    try:
+        # 测试工具调用
+        response = await deepclaude.chat_completions_without_stream(
+            messages=weather_messages,
+            model_arg=(0.7, 0.9, 0, 0),
+            tools=tools,
+            tool_choice="auto"
+        )
+        
+        logger.info(f"非流式工具调用响应: {response}")
+        
+        assert "content" in response, "返回结果中缺少内容字段"
+        assert "role" in response, "返回结果中缺少角色字段"
+        assert response["role"] == "assistant", "角色字段值错误"
+        
+        # 工具调用测试可能不会每次都返回工具调用，所以这里只是记录而不断言
+        if "tool_calls" in response:
+            logger.info(f"收到工具调用: {response['tool_calls']}")
+            assert len(response["tool_calls"]) > 0, "工具调用列表为空"
+            assert "tool_results" in response, "返回结果中缺少工具结果字段"
+        else:
+            logger.info("本次测试未返回工具调用")
+        
+        logger.info("DeepClaude非流式输出工具调用测试通过!")
+    except Exception as e:
+        logger.error(f"DeepClaude非流式输出工具调用测试失败: {e}", exc_info=True)
         raise
 
 async def test_reasoning_function(deepclaude):
@@ -256,7 +308,8 @@ async def run_tests():
         "推理功能测试": False,
         "回退机制测试": False,
         "流式输出测试": False,
-        "非流式输出测试": False
+        "非流式输出测试": False,
+        "非流式工具调用测试": False
     }
     
     try:
@@ -286,6 +339,12 @@ async def run_tests():
                     test_results["非流式输出测试"] = True
                 except Exception as e:
                     logger.error(f"非流式输出测试失败: {e}", exc_info=True)
+                
+                try:
+                    await test_non_stream_output_with_tools(deepclaude)
+                    test_results["非流式工具调用测试"] = True
+                except Exception as e:
+                    logger.error(f"非流式工具调用测试失败: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"测试过程中发生未捕获的异常: {e}", exc_info=True)
     
