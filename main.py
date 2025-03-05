@@ -14,6 +14,7 @@ def main():
     reload = os.getenv('RELOAD', 'false').lower() == 'true'
 
     # 启动配置
+    logger.info(f"服务即将启动 - host: {host}, port: {port}, reload: {reload}")
     uvicorn.run(
         'app.main:app',
         host=host,

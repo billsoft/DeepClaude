@@ -1,0 +1,6 @@
+[2025-03-04 21:55:10] [INFO] [logger.py:90] 日志级别设置为: INFO
+[2025-03-04 21:55:10] [INFO] [main.py:17] 服务即将启动 - host: 0.0.0.0, port: 1124, reload: False
+[2025-03-04 21:55:10] [INFO] [auth.py:10] 当前工作目录: /Users/wanglei/code/DeepClaude
+[2025-03-04 21:55:10] [INFO] [auth.py:11] 尝试加载.env文件...
+[2025-03-04 21:55:10] [INFO] [auth.py:17] ALLOW_API_KEY环境变量状态: 已设置
+[2025-03-04 21:55:10] [INFO] [auth.py:24] Loaded API key starting with: Deep

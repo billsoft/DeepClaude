@@ -1,0 +1,51 @@
+[2025-03-04 20:33:02] [INFO] [logger.py:90] 日志级别设置为: INFO
+[2025-03-04 20:33:02] [INFO] [main.py:17] 服务即将启动 - host: 0.0.0.0, port: 1124, reload: False
+[2025-03-04 20:33:02] [INFO] [auth.py:10] 当前工作目录: /Users/wanglei/code/DeepClaude
+[2025-03-04 20:33:02] [INFO] [auth.py:11] 尝试加载.env文件...
+[2025-03-04 20:33:02] [INFO] [auth.py:17] ALLOW_API_KEY环境变量状态: 已设置
+[2025-03-04 20:33:02] [INFO] [auth.py:24] Loaded API key starting with: Deep
+[2025-03-04 20:33:02] [INFO] [core.py:15] 初始化DeepClaude服务...
+[2025-03-04 20:33:02] [INFO] [claude_client.py:57] 初始化Claude客户端: provider=anthropic, url=https://claude.agentpt.com/v1/messages
+[2025-03-04 20:33:02] [INFO] [deepseek.py:35] 初始化DeepSeek推理提供者: provider=deepseek, url=https://api.deepseek.com/v1/chat/completions, mode=auto
+[2025-03-04 20:33:02] [INFO] [core.py:45] 数据库存储已禁用
+[2025-03-04 20:33:02] [INFO] [core.py:48] DeepClaude服务初始化完成
+[2025-03-04 20:33:02] [INFO] [main.py:171] 开始请求
+[2025-03-04 20:33:32] [INFO] [auth.py:56] API密钥验证通过
+[2025-03-04 20:33:32] [INFO] [main.py:240] 收到原始请求:
+[2025-03-04 20:33:32] [INFO] [main.py:241] 请求头: {'host': '192.168.100.182:1124', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'accept': 'application/json', 'content-type': 'application/json', 'user-agent': 'OpenAI/Python 1.64.0', 'x-stainless-lang': 'python', 'x-stainless-package-version': '1.64.0', 'x-stainless-os': 'Linux', 'x-stainless-arch': 'arm64', 'x-stainless-runtime': 'CPython', 'x-stainless-runtime-version': '3.12.3', 'authorization': 'Bearer DeepSYSAI', 'x-stainless-async': 'false', 'x-stainless-retry-count': '0', 'x-stainless-read-timeout': '300.0', 'content-length': '1850'}
+[2025-03-04 20:33:32] [INFO] [main.py:242] 请求体: {"messages": [{"role": "system", "content": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n"}, {"role": "user", "content": "沈阳天气"}], "model": "gpt-4o", "functions": [{"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "parameters": {"properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"], "type": "object"}}, {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "parameters": {"properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"], "type": "object"}}], "stream": true, "stream_options": {"include_usage": true}, "user": "2cdb8f37-7fdb-42f2-95d9-140769ef24f4"}
+[2025-03-04 20:33:32] [INFO] [main.py:253] 检测到 OpenAI 格式的 functions 定义，正在转换为 tools 格式
+[2025-03-04 20:33:32] [INFO] [main.py:271] 转换工具: tavily_search => {"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}
+[2025-03-04 20:33:32] [INFO] [main.py:271] 转换工具: tavily_extract => {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}
+[2025-03-04 20:33:32] [INFO] [main.py:273] 转换完成，共 2 个工具
+[2025-03-04 20:33:32] [INFO] [main.py:280] 收到工具调用请求，包含 2 个工具
+[2025-03-04 20:33:32] [INFO] [main.py:296] 工具选择策略: auto
+[2025-03-04 20:33:32] [INFO] [main.py:304] 使用流式响应处理请求
+[2025-03-04 20:33:32] [INFO] [core.py:59] 开始流式处理请求...
+[2025-03-04 20:33:32] [INFO] [core.py:64] 直接透传模式(流式): 包含 2 个工具
+[2025-03-04 20:33:32] [INFO] [handlers.py:97] 验证工具: tavily_search => {"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}
+[2025-03-04 20:33:32] [INFO] [handlers.py:97] 验证工具: tavily_extract => {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}
+[2025-03-04 20:33:32] [INFO] [handlers.py:105] 工具验证完成，共 2 个有效工具
+[2025-03-04 20:33:32] [INFO] [claude_client.py:310] 添加了 2 个验证通过的工具到请求
+[2025-03-04 20:33:32] [INFO] [claude_client.py:368] 开始 Claude 流式请求
+[2025-03-04 20:33:32] [INFO] [claude_client.py:372] Claude 完整请求体: {"model": "claude-3-7-sonnet-20250219", "temperature": 0.7, "max_tokens": 8192, "messages": [{"role": "user", "content": "沈阳天气"}], "stream": true, "system": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n", "top_p": 0.9, "tools": [{"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}, {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}], "tool_choice": {"type": "auto"}}
+[2025-03-04 20:33:34] [WARNING] [claude_client.py:403] 跳过非数据行: event: message_start
+[2025-03-04 20:33:34] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_start
+[2025-03-04 20:33:34] [WARNING] [claude_client.py:403] 跳过非数据行: event: ping
+[2025-03-04 20:33:34] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:34] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:34] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:35] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:35] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:35] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:35] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_stop
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_start
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_delta
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: content_block_stop
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: message_delta
+[2025-03-04 20:33:37] [WARNING] [claude_client.py:403] 跳过非数据行: event: message_stop
+[2025-03-04 20:33:37] [INFO] [claude_client.py:474] Claude 流式请求完成

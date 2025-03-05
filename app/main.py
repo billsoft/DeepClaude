@@ -34,8 +34,12 @@ from fastapi.responses import StreamingResponse  # 用于处理流式响应
 from fastapi.middleware.cors import CORSMiddleware  # 处理跨域请求的中间件
 from app.utils.logger import logger  # 日志工具
 from app.utils.auth import verify_api_key  # API密钥验证
-from app.deepclaude.deepclaude import DeepClaude  # DeepClaude核心类
 from fastapi.responses import JSONResponse  # 用于返回JSON响应
+
+# 导入API路由
+from app.api.v1.deepclaude import router as deepclaude_router
+# 导入DeepClaude类
+from app.deepclaude import DeepClaude
 
 app = FastAPI(title="DeepClaude API")
 
@@ -147,24 +151,20 @@ if not CLAUDE_API_KEY:
     logger.critical("必须设置 CLAUDE_API_KEY")
     sys.exit(1)
 
-# 创建 DeepClaude 实例
+# 初始化DeepClaude实例
 deep_claude = DeepClaude(
-    # Claude配置(回答者)
     claude_api_key=CLAUDE_API_KEY,
     claude_api_url=CLAUDE_API_URL,
     claude_provider=CLAUDE_PROVIDER,
-    
-    # DeepSeek配置(思考者选项1)
     deepseek_api_key=DEEPSEEK_API_KEY,
     deepseek_api_url=DEEPSEEK_API_URL,
     deepseek_provider=DEEPSEEK_PROVIDER,
-    
-    # Ollama配置(思考者选项2)
     ollama_api_url=OLLAMA_API_URL,
-    
-    # 思考格式配置
     is_origin_reasoning=IS_ORIGIN_REASONING
 )
+
+# 注册API路由
+app.include_router(deepclaude_router)
 
 # 验证日志级别
 logger.debug("当前日志级别为 DEBUG")
@@ -219,51 +219,101 @@ async def list_models():
 
 @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
 async def chat_completions(request: Request):
+    """处理聊天补全请求
+    
+    支持流式和非流式响应，兼容OpenAI和Claude API格式
+    支持工具调用功能
+    需要API密钥验证
+    
+    Args:
+        request (Request): FastAPI请求对象
+        
+    Returns:
+        StreamingResponse | JSONResponse: 流式或非流式响应
+        
+    Raises:
+        HTTPException: 请求参数错误或服务器错误时抛出
+    """
     try:
-        data = await request.json()
-        logger.info("收到完整的请求数据:")
-        logger.info(f"模型名称: {data.get('model', 'unknown')}")
-        logger.info(f"消息数量: {len(data.get('messages', []))}")
-        logger.info(f"是否流式: {data.get('stream', False)}")
-        logger.info(f"完整请求数据: {json.dumps(data, ensure_ascii=False)}")
+        # 记录原始请求信息
+        raw_request = await request.json()
+        logger.info("收到原始请求:")
+        logger.info(f"请求头: {dict(request.headers)}")
+        logger.info(f"请求体: {json.dumps(raw_request, ensure_ascii=False)}")
         
         # 验证必要参数
-        if "messages" not in data:
-            raise ValueError("Missing messages parameter")
+        if "messages" not in raw_request:
+            raise ValueError("缺少必要的messages参数")
             
-        # 提取工具相关参数，添加详细日志
-        tools = data.get("tools", [])
-        tool_choice = data.get("tool_choice", "auto")
+        # 提取工具相关参数，添加格式转换
+        tools = raw_request.get("tools", [])
+        
+        # 检查并转换 OpenAI functions 格式到 Claude tools 格式
+        if not tools and "functions" in raw_request:
+            logger.info("检测到 OpenAI 格式的 functions 定义，正在转换为 tools 格式")
+            functions = raw_request.get("functions", [])
+            tools = []
+            for func in functions:
+                properties = func.get("parameters", {}).get("properties", {})
+                required = func.get("parameters", {}).get("required", [])
+                
+                # 转换为Claude API兼容的格式
+                tool = {
+                    "name": func.get("name", "未命名工具"),
+                    "description": func.get("description", ""),
+                    "input_schema": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required
+                    }
+                }
+                tools.append(tool)
+                logger.info(f"转换工具: {func.get('name')} => {json.dumps(tool, ensure_ascii=False)}")
+            
+            logger.info(f"转换完成，共 {len(tools)} 个工具")
+            raw_request["tools"] = tools
+            
+        tool_choice = raw_request.get("tool_choice", "auto")
         
         # 记录工具调用请求信息
         if tools:
             logger.info(f"收到工具调用请求，包含 {len(tools)} 个工具")
             for tool in tools:
-                if isinstance(tool, dict) and "function" in tool:
-                    func = tool["function"]
-                    logger.info(f"工具名称: {func.get('name', '未命名工具')}")
-                    logger.info(f"工具描述: {func.get('description', '无描述')}")
+                if isinstance(tool, dict):
+                    if "function" in tool:
+                        func = tool["function"]
+                        logger.info(f"工具名称: {func.get('name', '未命名工具')}")
+                        logger.info(f"工具描述: {func.get('description', '无描述')}")
+                    elif "type" in tool and tool["type"] == "custom":
+                        logger.info(f"工具名称: {tool.get('name', '未命名工具')}")
+                        logger.info(f"工具描述: {tool.get('description', '无描述')}")
                     logger.debug(f"工具详情: {json.dumps(tool, ensure_ascii=False)}")
                 else:
                     logger.warning(f"收到无效的工具定义: {tool}")
-            logger.info(f"工具选择策略: {tool_choice}")
-        else:
-            logger.warning("请求中不包含工具，这可能是因为:")
-            logger.warning("1. Dify 没有正确配置工具")
-            logger.warning("2. 工具配置没有正确传递到请求中")
-            logger.warning("3. 工具参数在传递过程中丢失")
-            logger.warning("请检查 Dify 工具配置和请求数据")
             
-        if data.get("stream", False):
-            logger.info("使用流式响应处理工具调用")
+            # 记录工具选择策略
+            if isinstance(tool_choice, str):
+                logger.info(f"工具选择策略: {tool_choice}")
+            elif isinstance(tool_choice, dict):
+                logger.info(f"工具选择策略: {json.dumps(tool_choice, ensure_ascii=False)}")
+            else:
+                logger.info(f"工具选择策略: {tool_choice}")
+            
+        # 处理流式请求
+        if raw_request.get("stream", False):
+            logger.info("使用流式响应处理请求")
             return StreamingResponse(
                 deep_claude.chat_completions_with_stream(
-                    messages=data["messages"],
+                    messages=raw_request["messages"],
                     chat_id=f"chatcmpl-{uuid.uuid4()}",
                     created_time=int(time.time()),
-                    model=data.get("model", "deepclaude"),
+                    model=raw_request.get("model", "deepclaude"),
                     tools=tools,
-                    tool_choice=tool_choice
+                    tool_choice=tool_choice,
+                    temperature=raw_request.get("temperature", 0.7),
+                    top_p=raw_request.get("top_p", 0.9),
+                    presence_penalty=raw_request.get("presence_penalty", 0),
+                    frequency_penalty=raw_request.get("frequency_penalty", 0)
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -275,13 +325,18 @@ async def chat_completions(request: Request):
                     "Keep-Alive": "timeout=600"
                 }
             )
+        
+        # 处理非流式请求
         else:
-            logger.info("使用非流式响应处理工具调用")
+            logger.info("使用非流式响应处理请求")
+            model_args = get_and_validate_params(raw_request)
             response = await deep_claude.chat_completions_without_stream(
-                messages=data["messages"],
-                model_arg=get_and_validate_params(data),
+                messages=raw_request["messages"],
+                model_arg=model_args,
                 tools=tools,
-                tool_choice=tool_choice
+                tool_choice=tool_choice,
+                deepseek_model=raw_request.get("deepseek_model", "deepseek-reasoner"),
+                claude_model=raw_request.get("model", os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'))
             )
             
             # 记录工具调用响应
@@ -304,13 +359,27 @@ async def chat_completions(request: Request):
         logger.warning(f"参数验证错误: {e}")
         return JSONResponse(
             status_code=400,
-            content={"error": str(e)}
+            content={
+                "error": {
+                    "message": str(e),
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None
+                }
+            }
         )
     except Exception as e:
         logger.error(f"处理请求时发生错误: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"error": "Internal server error"}
+            content={
+                "error": {
+                    "message": "服务器内部错误",
+                    "type": "server_error",
+                    "param": None,
+                    "code": None
+                }
+            }
         )
 
 def get_and_validate_params(body: dict) -> tuple:
@@ -322,28 +391,40 @@ def get_and_validate_params(body: dict) -> tuple:
         body (dict): 请求体字典
     
     Returns:
-        tuple: 包含以下参数的元组：
-            - temperature: 采样温度（float）
-            - top_p: 核采样（float）
-            - presence_penalty: 主题新鲜度（float）
-            - frequency_penalty: 词频惩罚度（float）
-            - stream: 是否流式输出（bool）
+        tuple: (temperature, top_p, presence_penalty, frequency_penalty, stream)
     
     Raises:
         ValueError: 参数验证失败时抛出
     """
-    # TODO: 默认值设定允许自定义
-    temperature: float = body.get("temperature", 0.5)
-    top_p: float = body.get("top_p", 0.9)
-    presence_penalty: float = body.get("presence_penalty", 0.0)
-    frequency_penalty: float = body.get("frequency_penalty", 0.0)
-    stream: bool = body.get("stream", True)
+    try:
+        temperature = float(body.get("temperature", 0.7))
+        top_p = float(body.get("top_p", 0.9))
+        presence_penalty = float(body.get("presence_penalty", 0.0))
+        frequency_penalty = float(body.get("frequency_penalty", 0.0))
+        stream = bool(body.get("stream", True))
 
-    if "sonnet" in body.get("model", ""): # Only Sonnet 设定 temperature 必须在 0 到 1 之间
-        if not isinstance(temperature, (float)) or temperature < 0.0 or temperature > 1.0:
-            raise ValueError("Sonnet 设定 temperature 必须在 0 到 1 之间")
+        # 验证参数范围
+        if temperature < 0.0 or temperature > 2.0:
+            raise ValueError("temperature 必须在 0.0 到 2.0 之间")
+            
+        if top_p < 0.0 or top_p > 1.0:
+            raise ValueError("top_p 必须在 0.0 到 1.0 之间")
+            
+        if presence_penalty < -2.0 or presence_penalty > 2.0:
+            raise ValueError("presence_penalty 必须在 -2.0 到 2.0 之间")
+            
+        if frequency_penalty < -2.0 or frequency_penalty > 2.0:
+            raise ValueError("frequency_penalty 必须在 -2.0 到 2.0 之间")
 
-    return (temperature, top_p, presence_penalty, frequency_penalty, stream)
+        # Sonnet 模型特殊处理
+        if "sonnet" in body.get("model", ""):
+            if temperature < 0.0 or temperature > 1.0:
+                raise ValueError("Sonnet 模型的 temperature 必须在 0.0 到 1.0 之间")
+
+        return (temperature, top_p, presence_penalty, frequency_penalty, stream)
+        
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"参数验证失败: {str(e)}")
 
 @app.post("/test_tool_call")
 async def test_tool_call(request: Request):

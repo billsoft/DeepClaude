@@ -1,0 +1,143 @@
+[2025-03-05 08:46:47] [INFO] [logger.py:90] 日志级别设置为: INFO
+[2025-03-05 08:46:47] [INFO] [main.py:17] 服务即将启动 - host: 0.0.0.0, port: 1124, reload: False
+[2025-03-05 08:46:47] [INFO] [auth.py:10] 当前工作目录: /Users/wanglei/code/DeepClaude
+[2025-03-05 08:46:47] [INFO] [auth.py:11] 尝试加载.env文件...
+[2025-03-05 08:46:47] [INFO] [auth.py:17] ALLOW_API_KEY环境变量状态: 已设置
+[2025-03-05 08:46:47] [INFO] [auth.py:24] Loaded API key starting with: Deep
+[2025-03-05 08:46:48] [INFO] [core.py:17] 初始化DeepClaude服务...
+[2025-03-05 08:46:48] [INFO] [claude_client.py:57] 初始化Claude客户端: provider=anthropic, url=https://claude.agentpt.com/v1/messages
+[2025-03-05 08:46:48] [INFO] [deepseek.py:35] 初始化DeepSeek推理提供者: provider=deepseek, url=https://api.deepseek.com/v1/chat/completions, mode=auto
+[2025-03-05 08:46:48] [INFO] [core.py:47] 数据库存储已禁用
+[2025-03-05 08:46:48] [INFO] [core.py:50] DeepClaude服务初始化完成
+[2025-03-05 08:46:48] [INFO] [main.py:171] 开始请求
+[2025-03-05 08:46:52] [INFO] [auth.py:56] API密钥验证通过
+[2025-03-05 08:46:52] [INFO] [main.py:240] 收到原始请求:
+[2025-03-05 08:46:52] [INFO] [main.py:241] 请求头: {'host': '192.168.100.182:1124', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'accept': 'application/json', 'content-type': 'application/json', 'user-agent': 'OpenAI/Python 1.64.0', 'x-stainless-lang': 'python', 'x-stainless-package-version': '1.64.0', 'x-stainless-os': 'Linux', 'x-stainless-arch': 'arm64', 'x-stainless-runtime': 'CPython', 'x-stainless-runtime-version': '3.12.3', 'authorization': 'Bearer DeepSYSAI', 'x-stainless-async': 'false', 'x-stainless-retry-count': '0', 'x-stainless-read-timeout': '300.0', 'content-length': '1850'}
+[2025-03-05 08:46:52] [INFO] [main.py:242] 请求体: {"messages": [{"role": "system", "content": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n"}, {"role": "user", "content": "沈阳天气"}], "model": "gpt-4o", "functions": [{"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "parameters": {"properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"], "type": "object"}}, {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "parameters": {"properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"], "type": "object"}}], "stream": true, "stream_options": {"include_usage": true}, "user": "2cdb8f37-7fdb-42f2-95d9-140769ef24f4"}
+[2025-03-05 08:46:52] [INFO] [main.py:253] 检测到 OpenAI 格式的 functions 定义，正在转换为 tools 格式
+[2025-03-05 08:46:52] [INFO] [main.py:271] 转换工具: tavily_search => {"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}
+[2025-03-05 08:46:52] [INFO] [main.py:271] 转换工具: tavily_extract => {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}
+[2025-03-05 08:46:52] [INFO] [main.py:273] 转换完成，共 2 个工具
+[2025-03-05 08:46:52] [INFO] [main.py:280] 收到工具调用请求，包含 2 个工具
+[2025-03-05 08:46:52] [INFO] [main.py:296] 工具选择策略: auto
+[2025-03-05 08:46:52] [INFO] [main.py:304] 使用流式响应处理请求
+[2025-03-05 08:46:52] [INFO] [core.py:72] 开始流式处理请求...
+[2025-03-05 08:46:52] [INFO] [core.py:77] 直接透传模式(流式): 包含 2 个工具
+[2025-03-05 08:46:52] [INFO] [handlers.py:33] 开始验证和转换 2 个工具至 claude-3 格式
+[2025-03-05 08:46:52] [INFO] [handlers.py:142] 验证工具[0]: tavily_search (Claude格式 -> claude-3)
+[2025-03-05 08:46:52] [INFO] [handlers.py:142] 验证工具[1]: tavily_extract (Claude格式 -> claude-3)
+[2025-03-05 08:46:52] [INFO] [handlers.py:211] 工具验证完成: 2 个输入工具 -> 2 个有效工具
+[2025-03-05 08:46:52] [INFO] [core.py:139] 最终使用 2 个工具调用Claude
+[2025-03-05 08:46:52] [INFO] [core.py:165] 开始调用Claude流式接口...
+[2025-03-05 08:46:52] [INFO] [claude_client.py:310] 添加了 2 个验证通过的工具到请求
+[2025-03-05 08:46:52] [INFO] [claude_client.py:864] Claude API请求体: {"model": "claude-3-7-sonnet-20250219", "temperature": 0.7, "max_tokens": 8192, "messages": [{"role": "user", "content": "沈阳天气"}], "stream": true, "system": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n", "top_p": 0.9, "tools": [{"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}, {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}], "tool_choice": {"type": "auto"}}
+[2025-03-05 08:46:52] [INFO] [claude_client.py:868] 开始向Claude API发送请求: https://claude.agentpt.com/v1/messages
+[2025-03-05 08:46:55] [INFO] [claude_client.py:374] 开始处理Claude SSE事件流
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[1]: 'message_start'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[1] 'message_start' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [WARNING] [claude_client.py:824] 未知事件类型[1]: message_start, 数据: {"type": "message_start", "message": {"id": "msg_01UdeNXoNxKa3FXdX17yxoup", "type": "message", "role...
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[1]: message_start
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[2]: 'content_block_start'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[2] 'content_block_start' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:445] 内容块开始[2], 类型: text
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[2]: content_block_start
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[3]: 'ping'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[3] 'ping' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[3]: ping
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[4]: 'content_block_delta'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[4] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:550] 接收到内容块增量[4], 类型: text_delta
+[2025-03-05 08:46:55] [INFO] [claude_client.py:610] 处理文本增量[1]: '您'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[4]: content_block_delta
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[5]: 'content_block_delta'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[5] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:550] 接收到内容块增量[5], 类型: text_delta
+[2025-03-05 08:46:55] [INFO] [claude_client.py:610] 处理文本增量[2]: '好！您想了解沈阳的天气情'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[5]: content_block_delta
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[6]: 'content_block_delta'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[6] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:550] 接收到内容块增量[6], 类型: text_delta
+[2025-03-05 08:46:55] [INFO] [claude_client.py:610] 处理文本增量[3]: '况。我会为您查询最新的'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[6]: content_block_delta
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[7]: 'content_block_delta'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[7] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:550] 接收到内容块增量[7], 类型: text_delta
+[2025-03-05 08:46:55] [INFO] [claude_client.py:610] 处理文本增量[4]: '沈阳天气信息。'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[7]: content_block_delta
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[8]: 'content_block_stop'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[8] 'content_block_stop' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:455] 内容块结束[8], 索引: 0
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[8]: content_block_stop
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[9]: 'content_block_start'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[9] 'content_block_start' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:445] 内容块开始[9], 类型: tool_use
+[2025-03-05 08:46:55] [INFO] [claude_client.py:449] 检测到工具使用块开始
+[2025-03-05 08:46:55] [INFO] [claude_client.py:392] 处理上一个事件[9]: content_block_start
+[2025-03-05 08:46:55] [INFO] [claude_client.py:418] 接收到新事件[10]: 'content_block_delta'
+[2025-03-05 08:46:55] [INFO] [claude_client.py:437] 事件[10] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:55] [INFO] [claude_client.py:550] 接收到内容块增量[10], 类型: input_json_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:392] 处理上一个事件[10]: content_block_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:418] 接收到新事件[11]: 'content_block_delta'
+[2025-03-05 08:46:56] [INFO] [claude_client.py:437] 事件[11] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:56] [INFO] [claude_client.py:550] 接收到内容块增量[11], 类型: input_json_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:392] 处理上一个事件[11]: content_block_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:418] 接收到新事件[12]: 'content_block_delta'
+[2025-03-05 08:46:56] [INFO] [claude_client.py:437] 事件[12] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:56] [INFO] [claude_client.py:550] 接收到内容块增量[12], 类型: input_json_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:392] 处理上一个事件[12]: content_block_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:418] 接收到新事件[13]: 'content_block_delta'
+[2025-03-05 08:46:56] [INFO] [claude_client.py:437] 事件[13] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:56] [INFO] [claude_client.py:550] 接收到内容块增量[13], 类型: input_json_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:392] 处理上一个事件[13]: content_block_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:418] 接收到新事件[14]: 'content_block_delta'
+[2025-03-05 08:46:56] [INFO] [claude_client.py:437] 事件[14] 'content_block_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:56] [INFO] [claude_client.py:550] 接收到内容块增量[14], 类型: input_json_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:392] 处理上一个事件[14]: content_block_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:418] 接收到新事件[15]: 'content_block_stop'
+[2025-03-05 08:46:56] [INFO] [claude_client.py:437] 事件[15] 'content_block_stop' 解析数据成功，类型: dict
+[2025-03-05 08:46:56] [INFO] [claude_client.py:455] 内容块结束[15], 索引: 1
+[2025-03-05 08:46:56] [WARNING] [claude_client.py:529] 内容块索引1结束，但未找到工具数据
+[2025-03-05 08:46:56] [INFO] [claude_client.py:541] 生成默认工具调用: tavily_search
+[2025-03-05 08:46:56] [INFO] [core.py:203] 收到Claude工具调用[5]: tavily_search
+[2025-03-05 08:46:56] [INFO] [core.py:223] 处理工具调用: {"id": "default_call", "type": "function", "function": {"name": "tavily_search", "arguments": "{\"query\": \"\\u6c88\\u9633\\u4eca\\u65e5\\u5929\\u6c14\"}"}}
+[2025-03-05 08:46:56] [INFO] [core.py:258] 发送工具调用响应[5]: {"id": "chatcmpl-7b15866c-5191-49cb-850e-64464c7ac155", "object": "chat.completion.chunk", "created": 1741135612, "model": "gpt-4o", "choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls...
+[2025-03-05 08:46:56] [INFO] [claude_client.py:392] 处理上一个事件[15]: content_block_stop
+[2025-03-05 08:46:56] [INFO] [claude_client.py:418] 接收到新事件[16]: 'message_delta'
+[2025-03-05 08:46:56] [INFO] [claude_client.py:437] 事件[16] 'message_delta' 解析数据成功，类型: dict
+[2025-03-05 08:46:56] [INFO] [claude_client.py:788] 接收到消息增量[16], stop_reason: tool_use
+[2025-03-05 08:46:56] [INFO] [claude_client.py:792] 检测到工具使用停止原因
+[2025-03-05 08:46:56] [INFO] [claude_client.py:392] 处理上一个事件[16]: message_delta
+[2025-03-05 08:46:56] [INFO] [claude_client.py:418] 接收到新事件[17]: 'message_stop'
+[2025-03-05 08:46:56] [INFO] [claude_client.py:437] 事件[17] 'message_stop' 解析数据成功，类型: dict
+[2025-03-05 08:46:56] [INFO] [claude_client.py:772] 处理消息生成完成事件
+[2025-03-05 08:46:56] [INFO] [claude_client.py:774] 最终文本内容长度: 31 字符
+[2025-03-05 08:46:56] [INFO] [claude_client.py:777] 工具调用总数: 1
+[2025-03-05 08:46:56] [INFO] [claude_client.py:780] 工具调用[0]: tavily_search, id=default_call
+[2025-03-05 08:46:56] [INFO] [claude_client.py:830] SSE事件流处理完成: 共处理 17 个事件
+[2025-03-05 08:46:56] [INFO] [claude_client.py:831] 处理结果: 生成了 4 段文本内容 (31 字符) 和 1 个工具调用
+[2025-03-05 08:46:56] [INFO] [claude_client.py:833] 最终工具调用数量: 1
+[2025-03-05 08:46:56] [INFO] [claude_client.py:835] 工具调用[0]: tavily_search
+[2025-03-05 08:46:56] [INFO] [claude_client.py:896] 流式请求结束，确保发送完成标记
+[2025-03-05 08:46:56] [INFO] [claude_client.py:901] Claude 流式请求完成，总用时: 3.60秒
+[2025-03-05 08:46:56] [INFO] [core.py:288] 流式处理完成，总共发送了 6 个响应片段 (内容: 5, 工具调用: 1)
+[2025-03-05 08:46:56] [INFO] [core.py:304] 发送工具调用完成标记: {"id": "chatcmpl-7b15866c-5191-49cb-850e-64464c7ac155", "object": "chat.completion.chunk", "created": 1741135612, "model": "gpt-4o", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
+[2025-03-05 08:46:56] [INFO] [core.py:317] 执行工具调用[0]: tavily_search, 参数: {'query': '沈阳今日天气'}
+[2025-03-05 08:46:56] [INFO] [core.py:959] 执行工具调用: {"tool": "tavily_search", "tool_input": {"query": "沈阳今日天气"}}
+[2025-03-05 08:46:56] [INFO] [core.py:996] 解析后的工具名称: tavily_search, 输入参数: {"query": "沈阳今日天气"}
+[2025-03-05 08:46:56] [INFO] [core.py:1029] 执行Tavily搜索: 沈阳今日天气
+[2025-03-05 08:46:56] [INFO] [core.py:1062] 发送Tavily API请求
+[2025-03-05 08:46:58] [ERROR] [core.py:1066] Tavily API错误 (401): {"detail":{"error":"Unauthorized: missing or invalid API key."}}
+[2025-03-05 08:46:58] [INFO] [core.py:330] 工具调用[0]执行结果: 搜索服务错误 (401): 请稍后再试...
+[2025-03-05 08:46:58] [INFO] [core.py:364] 将工具调用结果回传给Claude, 新消息数: 4
+[2025-03-05 08:46:58] [INFO] [core.py:375] 使用工具结果继续与Claude对话...
+[2025-03-05 08:46:58] [INFO] [claude_client.py:864] Claude API请求体: {"model": "claude-3-7-sonnet-20250219", "temperature": 0.7, "max_tokens": 8192, "messages": [{"role": "user", "content": "沈阳天气"}, {"role": "assistant", "content": "我需要查询沈阳的天气信息", "tool_calls": [{"id": "default_call", "type": "function", "function": {"name": "tavily_search", "arguments": "{\"query\": \"\\u6c88\\u9633\\u4eca\\u65e5\\u5929\\u6c14\"}"}}]}, {"tool_call_id": "default_call", "role": "tool", "name": "tavily_search", "content": "搜索服务错误 (401): 请稍后再试"}], "stream": true, "system": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n", "top_p": 0.9}
+[2025-03-05 08:46:58] [INFO] [claude_client.py:868] 开始向Claude API发送请求: https://claude.agentpt.com/v1/messages
+[2025-03-05 08:46:58] [ERROR] [claude_client.py:885] Claude API错误 (502): <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+
+[2025-03-05 08:46:58] [INFO] [core.py:429] 发送最终完成标记: {"id": "chatcmpl-7b15866c-5191-49cb-850e-64464c7ac155", "object": "chat.completion.chunk", "created": 1741135618, "model": "gpt-4o", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}

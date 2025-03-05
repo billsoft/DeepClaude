@@ -23,6 +23,7 @@ import time
 import tiktoken
 import asyncio
 import uuid
+import re  # 添加正则表达式模块
 from typing import AsyncGenerator, Dict, List, Any, Optional, Tuple
 from app.utils.logger import logger
 from app.clients import DeepSeekClient, ClaudeClient, OllamaR1Client
@@ -30,7 +31,6 @@ from app.utils.message_processor import MessageProcessor
 import aiohttp
 import os
 from dotenv import load_dotenv
-import re
 import sys
 import logging
 import requests
@@ -272,358 +272,193 @@ class DeepClaude:
         else:
             return f"未知错误: {str(e)}"
 
-    async def chat_completions_with_stream(self, messages: list, tools: list = None, tool_choice: str = "auto", **kwargs):
-        """流式对话完成，支持工具调用"""
+    async def chat_completions_with_stream(self, messages: list, tools: list = None, tool_choice = "auto", **kwargs):
+        """处理流式请求，支持思考-回答模式和工具调用
+
+        Args:
+            messages: 对话消息列表
+            tools: 工具列表
+            tool_choice: 工具选择策略
+            **kwargs: 其他参数
+
+        Yields:
+            bytes: 流式响应数据
+        """
+        # 初始化变量
+        chat_id = kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}")
+        created_time = kwargs.get("created_time", int(time.time()))
+        model_name = kwargs.get("model", "deepclaude")
+        claude_model = os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219')
+        deepseek_model = kwargs.get("deepseek_model", "deepseek-reasoner")
+        model_arg = tuple(map(float, os.getenv('MODEL_ARG', '1.0,1.0,0.7,0.1').split(',')))
+        model = kwargs.get("model", "deepclaude")
+
         try:
             logger.info("开始流式处理请求...")
             logger.debug(f"输入消息: {messages}")
             
-            # 1. 准备参数和变量
-            chat_id = kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}")
-            created_time = kwargs.get("created_time", int(time.time()))
-            model_name = kwargs.get("model", "deepclaude")
-            has_tools = tools and len(tools) > 0
+            # 配置直接透传模式
+            direct_tool_pass = os.getenv('CLAUDE_DIRECT_TOOL_PASS', 'true').lower() == 'true'
             
-            # 验证工具配置
-            if has_tools:
-                logger.info(f"请求包含 {len(tools)} 个工具")
-                logger.info("原始工具格式:")
-                logger.info(json.dumps(tools, ensure_ascii=False))
+            # 如果启用直接透传且有工具，直接使用Claude处理
+            if direct_tool_pass and tools and len(tools) > 0:
+                logger.info(f"直接透传模式(非流式): 包含 {len(tools)} 个工具")
                 
-                # 验证并转换工具
-                tools = self._validate_and_convert_tools(tools, target_format='claude-3')
-                if tools:
-                    logger.info(f"验证成功 {len(tools)} 个工具")
-                    logger.info("转换后的工具格式:")
-                    logger.info(json.dumps(tools, ensure_ascii=False))
+                # 记录工具选择策略
+                if isinstance(tool_choice, str):
+                    logger.info(f"工具选择策略: {tool_choice}")
+                elif isinstance(tool_choice, dict):
+                    logger.info(f"工具选择策略: {json.dumps(tool_choice, ensure_ascii=False)}")
                 else:
+                    logger.info(f"工具选择策略: {tool_choice}")
+                
+                # 转换工具格式
+                converted_tools = self._validate_and_convert_tools(tools, target_format='claude-3')
+                
+                if not converted_tools:
                     logger.warning("没有有效的工具可用，将作为普通对话处理")
-                    has_tools = False
+                    result = {
+                        "id": chat_id,
+                        "object": "chat.completion",
+                        "created": created_time,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "没有找到有效的工具定义，将作为普通对话处理。"
+                            },
+                            "finish_reason": "stop"
+                        }]
+                    }
+                    yield f"data: {json.dumps(result, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
+                    return
                 
-                logger.info(f"工具选择策略: {tool_choice}")
-            else:
-                logger.info("请求中不包含工具，将作为普通对话处理")
-            
-            # 提取原始问题
-            original_question = ""
-            if messages and messages[-1]["role"] == "user":
-                original_question = messages[-1]["content"]
-                logger.info(f"原始问题: {original_question}")
+                logger.info(f"直接使用Claude模型: {claude_model}")
                 
-                # 分析问题是否需要工具
-                if has_tools:
-                    logger.info("分析问题是否需要工具...")
-                    need_weather = any(word in original_question.lower() for word in ["天气", "气温", "weather"])
-                    need_search = any(word in original_question.lower() for word in ["搜索", "查询", "search"])
-                    
-                    if need_weather:
-                        logger.info("检测到天气查询需求")
-                    if need_search:
-                        logger.info("检测到搜索查询需求")
-                    
-                    if not (need_weather or need_search):
-                        logger.info("未检测到明确的工具需求")
-            
-            # 2. 思考阶段
-            logger.info("开始思考阶段...")
-            search_enhanced = False
-            search_hint = ""
-            
-            if has_tools and self.search_enabled and original_question:
-                search_hint = await self._enhance_with_search(original_question)
-                if search_hint:
-                    search_enhanced = True
-                    logger.info("使用搜索增强思考")
-                    yield self._format_stream_response(
-                        f"使用搜索增强思考...\n{search_hint}",
-                        content_type="reasoning",
-                        is_first_thought=True,
-                        **kwargs
-                    )
-            
-            if not search_enhanced:
-                yield self._format_stream_response(
-                    "开始思考问题...",
-                    content_type="reasoning",
-                    is_first_thought=True,
-                    **kwargs
-                )
-            
-            # 获取推理内容
-            reasoning_content = []
-            reasoning_success = False
-            thought_complete = False
-            full_reasoning = ""
-            
-            try:
-                provider = self._get_reasoning_provider()
-                logger.info(f"使用推理提供者: {provider.__class__.__name__}")
+                # 准备Claude调用参数
+                claude_kwargs = {
+                    "messages": messages,
+                    "model": claude_model,
+                    "temperature": kwargs.get("temperature", 0.7),
+                    "top_p": kwargs.get("top_p", 0.9),
+                    "tools": converted_tools
+                }
                 
-                for retry_count, reasoning_mode in enumerate(self.reasoning_modes):
-                    if reasoning_success:
-                        break
-                        
-                    if retry_count > 0:
-                        logger.info(f"尝试使用不同的推理模式: {reasoning_mode}")
-                        os.environ["DEEPSEEK_REASONING_MODE"] = reasoning_mode
-                        provider = self._get_reasoning_provider()
-                    
-                    try:
-                        async for content_type, content in provider.get_reasoning(
-                            messages=messages,
-                            **self._prepare_thinker_kwargs(kwargs)
-                        ):
-                            if content_type == "reasoning":
-                                reasoning_content.append(content)
-                                logger.debug(f"收到推理内容: {content[:50]}...")
-                                yield self._format_stream_response(
-                                    content,
-                                    content_type="reasoning",
-                                    is_first_thought=False,
-                                    **kwargs
-                                )
-                            elif content_type == "content":
-                                thought_complete = True
-                                logger.debug("推理阶段完成")
-                        
-                        if len("".join(reasoning_content)) > self.min_reasoning_chars:
-                            reasoning_success = True
-                            logger.info("成功获取足够的推理内容")
-                    except Exception as e:
-                        logger.error(f"推理获取失败 (模式: {reasoning_mode}): {e}")
-                        
-                        if retry_count == len(self.reasoning_modes) - 1:
-                            error_message = await self._handle_api_error(e)
-                            logger.error(f"所有推理模式都失败: {error_message}")
-                            yield self._format_stream_response(
-                                f"思考过程中遇到错误: {error_message}",
-                                content_type="error",
-                                is_first_thought=False,
-                                **kwargs
-                            )
-                
-                full_reasoning = "\n".join(reasoning_content)
-                logger.info(f"推理内容长度: {len(full_reasoning)} 字符")
-                
-                if search_hint:
-                    full_reasoning = f"{search_hint}\n\n{full_reasoning}"
-                    logger.debug("已添加搜索提示到推理内容")
-                
-                # 3. 工具调用阶段
-                if has_tools and reasoning_success:
-                    logger.info(f"开始工具调用决策 - 工具数量: {len(tools)}")
-                    
-                    # 决定是否需要使用工具
-                    decision_prompt = self._format_tool_decision_prompt(
-                        original_question=original_question,
-                        reasoning=full_reasoning,
-                        tools=tools
-                    )
-                    logger.debug(f"工具决策提示: {decision_prompt[:200]}...")
-                    
-                    # 向Claude发送决策请求
-                    tool_decision_response = await self.claude_client.chat(
-                        messages=[{"role": "user", "content": decision_prompt}],
-                        tools=tools,
-                        tool_choice=tool_choice,
-                        **self._prepare_answerer_kwargs(kwargs)
-                    )
-                    
-                    # 如果决定使用工具，返回工具调用响应
-                    if "tool_calls" in tool_decision_response.get("choices", [{}])[0].get("message", {}):
-                        tool_calls = tool_decision_response["choices"][0]["message"]["tool_calls"]
-                        if tool_calls:
-                            tool_names = [t.get("function", {}).get("name", "未知工具") for t in tool_calls]
-                            logger.info(f"工具调用决策结果: 使用工具 {', '.join(tool_names)}")
-                            
-                            for tool_call in tool_calls:
-                                logger.info(f"生成工具调用响应: {tool_call.get('function', {}).get('name', '未知工具')}")
-                                yield self._format_tool_call_response(
-                                    tool_call=tool_call,
-                                    chat_id=chat_id,
-                                    created_time=created_time,
-                                    model=model_name
-                                )
-                            
-                            logger.info("工具调用流程结束，等待客户端执行工具")
-                            yield b'data: [DONE]\n\n'
-                            return
-                        else:
-                            logger.info("工具调用决策结果: 不使用工具")
+                # 工具选择策略转换
+                if isinstance(tool_choice, str):
+                    if tool_choice == "auto":
+                        claude_kwargs["tool_choice"] = {"type": "auto"}
+                    elif tool_choice == "none":
+                        # Claude不支持none，将使用空工具列表
+                        logger.info("检测到'none'工具选择策略，将不使用工具")
+                        claude_kwargs.pop("tools")
+                elif isinstance(tool_choice, dict):
+                    if tool_choice.get("type") == "function" and "function" in tool_choice:
+                        # OpenAI格式转为Claude格式
+                        func_name = tool_choice["function"].get("name")
+                        if func_name:
+                            logger.info(f"指定使用工具: {func_name}")
+                            claude_kwargs["tool_choice"] = {
+                                "type": "tool",
+                                "name": func_name
+                            }
                     else:
-                        logger.info("工具调用决策结果: 不使用工具")
+                        # 已是Claude格式或其他格式
+                        claude_kwargs["tool_choice"] = tool_choice
                 
-                # 4. 回答阶段
-                logger.info("开始生成最终回答...")
-                yield self._format_stream_response(
-                    "\n\n---\n思考完毕，开始回答：\n\n",
-                    content_type="separator",
-                    is_first_thought=False,
-                    **kwargs
-                )
-                
-                # 构造Claude的输入消息
-                combined_content = f"""
-这是我自己基于问题的思考过程:\n{full_reasoning}\n\n
-上面是我自己的思考过程不一定完全正确请借鉴思考过程和期中你也认为正确的部分（1000% 权重）
-，现在请给出详细和细致的答案，不要省略步骤和步骤细节
-，要分解原题确保你理解了原题的每个部分，也要掌握整体意思
-，最佳质量（1000% 权重），最详细解答（1000% 权重），不要回答太简单让我能参考一步步应用（1000% 权重）:"""
-                
-                claude_messages = [{"role": "user", "content": combined_content}]
-                logger.debug("向Claude发送最终提示")
-                
-                # 流式获取Claude回答
-                answer_content = []
-                async for content_type, content in self.claude_client.stream_chat(
-                    messages=claude_messages,
-                    **self._prepare_answerer_kwargs(kwargs)
-                ):
-                    if content_type in ["answer", "content"]:
-                        answer_content.append(content)
-                        logger.debug(f"收到回答内容: {content[:50]}...")
-                        yield self._format_stream_response(
-                            content,
-                            content_type="content",
-                            is_first_thought=False,
-                            **kwargs
-                        )
-                
-                logger.info("回答生成完成")
-                
-                # 发送流式响应结束标志
-                yield b'data: [DONE]\n\n'
-                
-            except Exception as e:
-                logger.error(f"流式处理过程中出错: {e}", exc_info=True)
-                error_message = await self._handle_api_error(e)
-                yield self._format_stream_response(
-                    f"处理请求时出错: {error_message}",
-                    content_type="error",
-                    is_first_thought=False,
-                    **kwargs
-                )
-                
-        except Exception as outer_e:
-            logger.error(f"流式处理外层错误: {outer_e}", exc_info=True)
-            yield self._format_stream_response(
-                f"服务器错误: {str(outer_e)}",
-                content_type="error",
-                is_first_thought=False,
-                **kwargs
-            )
-
-    def _prepare_thinker_kwargs(self, kwargs: dict) -> dict:
-        """准备思考者参数"""
-        provider_type = os.getenv('REASONING_PROVIDER', 'deepseek').lower()
+                try:
+                    # 非流式调用Claude API
+                    response = await self.claude_client.chat(**claude_kwargs)
+                    
+                    # 处理工具调用响应
+                    if "tool_calls" in response:
+                        tool_calls = response["tool_calls"]
+                        logger.info(f"Claude返回了 {len(tool_calls)} 个工具调用")
+                        
+                        # 构造标准的OpenAI格式响应
+                        result = {
+                            "id": chat_id,
+                            "object": "chat.completion",
+                            "created": created_time,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": None,
+                                    "tool_calls": tool_calls
+                                },
+                                "finish_reason": "tool_calls"
+                            }],
+                            "usage": {
+                                "prompt_tokens": response.get("usage", {}).get("prompt_tokens", 0),
+                                "completion_tokens": response.get("usage", {}).get("completion_tokens", 0),
+                                "total_tokens": response.get("usage", {}).get("total_tokens", 0)
+                            }
+                        }
+                        yield f"data: {json.dumps(result, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
+                        return
+                    else:
+                        # 处理普通回答响应
+                        content = response.get("content", "")
+                        if not content and "choices" in response and response["choices"]:
+                            content = response["choices"][0].get("message", {}).get("content", "")
+                            
+                        result = {
+                            "id": chat_id,
+                            "object": "chat.completion",
+                            "created": created_time,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": content
+                                },
+                                "finish_reason": "stop"
+                            }],
+                            "usage": {
+                                "prompt_tokens": response.get("usage", {}).get("prompt_tokens", 0),
+                                "completion_tokens": response.get("usage", {}).get("completion_tokens", 0),
+                                "total_tokens": response.get("usage", {}).get("total_tokens", 0)
+                            }
+                        }
+                        yield f"data: {json.dumps(result, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
+                        return
+                except Exception as e:
+                    logger.error(f"直接透传模式下API调用失败: {e}", exc_info=True)
+                    # 此处选择回退到推理-回答模式，而不是立即返回错误
+                    logger.info("将尝试使用推理-回答模式处理请求")
+        except Exception as e:
+            logger.error(f"处理流式请求时发生错误: {e}", exc_info=True)
+            error_response = {
+                "error": {
+                    "message": str(e),
+                    "type": "server_error",
+                    "code": "internal_error"
+                }
+            }
+            yield f"data: {json.dumps(error_response, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
+            return
         
-        if provider_type == 'ollama':
-            model = "deepseek-r1:32b"
-        else:
-            # 不再使用kwargs中传入的model参数，以避免使用不兼容的模型名称
-            # 而是使用环境变量或默认的DeepSeek模型名称
-            model = os.getenv('DEEPSEEK_MODEL', 'deepseek-reasoner')
-            
-            # 根据provider进行特定处理
-            if provider_type == 'deepseek':
-                model = 'deepseek-reasoner'  # 使用确定可用的模型
-            elif provider_type == 'siliconflow':
-                model = 'deepseek-ai/DeepSeek-R1'
-            elif provider_type == 'nvidia':
-                model = 'deepseek-ai/deepseek-r1'
-            
-        return {
-            'model': model,
-            'temperature': kwargs.get('temperature', 0.7),
-            'top_p': kwargs.get('top_p', 0.9)
-        }
-        
-    def _prepare_answerer_kwargs(self, kwargs: dict) -> dict:
-        """准备回答者参数"""
-        return {
-            'model': os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'),
-            'temperature': kwargs.get('temperature', 0.7),
-            'top_p': kwargs.get('top_p', 0.9)
-        }
-
-    def _chunk_content(self, content: str, chunk_size: int = 3) -> list[str]:
-        """将内容分割成小块以实现更细粒度的流式输出
-        
-        Args:
-            content: 要分割的内容
-            chunk_size: 每个块的大小，默认为3个字符
-            
-        Returns:
-            list[str]: 分割后的内容块列表
-        """
-        return [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
-
-    def _format_claude_prompt(self, original_question: str, reasoning: str) -> str:
-        """格式化给Claude的提示词"""
-        return f"""
-原始问题:
-{original_question}
-
-思考过程:
-{reasoning}
-
-请基于以上思考过程和原始问题,给出详细的答案。要求:
-1. 分步骤详细解答
-2. 确保理解问题的每个部分
-3. 给出完整的解决方案
-4. 如果思考过程有错误或不完整，请指出并补充正确的解答
-5. 保持回答的专业性和准确性
-"""
-
-    async def chat_completions_without_stream(
-        self,
-        messages: list,
-        model_arg: tuple[float, float, float, float],
-        tools: list = None,
-        tool_choice: str = "auto",
-        deepseek_model: str = "deepseek-reasoner",
-        claude_model: str = os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'),
-        **kwargs
-    ) -> dict:
-        """非流式对话完成
-        
-        Args:
-            messages: 对话消息列表
-            model_arg: 模型参数元组
-            tools: 工具列表
-            tool_choice: 工具选择策略
-            deepseek_model: DeepSeek 模型名称
-            claude_model: Claude 模型名称
-            
-        Returns:
-            dict: 包含回答内容的响应字典
-        """
-        logger.info("开始处理请求...")
-        logger.debug(f"输入消息: {messages}")
-        
-        # 创建或获取对话ID
+        # 保存对话到数据库（如果启用）
         if self.save_to_db:
             try:
-                # 提取用户ID（如果有的话）
-                user_id = None  # 非流式模式通常不传递用户ID，使用默认管理员用户
-                
-                # 从最后一条消息中提取标题（取前20个字符作为对话标题）
+                user_id = None
                 if messages and 'content' in messages[-1]:
                     title = messages[-1]['content'][:20] + "..."
-                    # 保存用户问题
                     user_question = messages[-1]['content']
                 else:
                     title = None
                     user_question = "未提供问题内容"
                     
-                # 创建新对话
                 self.current_conversation_id = self.db_ops.create_conversation(
-                    user_id=user_id, 
+                    user_id=user_id,
                     title=title
                 )
                 logger.info(f"创建新对话，ID: {self.current_conversation_id}")
                 
-                # 保存用户问题
                 self.db_ops.add_conversation_history(
                     conversation_id=self.current_conversation_id,
                     role="user",
@@ -633,7 +468,10 @@ class DeepClaude:
             except Exception as db_e:
                 logger.error(f"保存对话数据失败: {db_e}")
         
-        # 1. 获取推理内容
+        # 获取原始问题
+        original_question = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
+        
+        # 获取推理内容
         logger.info("正在获取推理内容...")
         try:
             reasoning = await self._get_reasoning_content(
@@ -645,8 +483,8 @@ class DeepClaude:
             logger.error(f"获取推理内容失败: {e}")
             reasoning = "无法获取推理内容"
             
-            # 尝试使用不同的推理模式重试
-            for reasoning_mode in self.reasoning_modes[1:]:  # 跳过第一个已使用的模式
+            # 尝试使用不同的推理模式
+            for reasoning_mode in self.reasoning_modes[1:]:
                 try:
                     logger.info(f"尝试使用不同的推理模式获取内容: {reasoning_mode}")
                     os.environ["DEEPSEEK_REASONING_MODE"] = reasoning_mode
@@ -663,45 +501,44 @@ class DeepClaude:
         
         logger.debug(f"获取到推理内容: {reasoning[:min(500, len(reasoning))]}...")
         
-        original_question = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
+        # 工具调用处理
         has_tool_decision = False
         tool_calls = []
         
-        # 如果提供了工具参数，确定是否需要使用工具
         if tools and len(tools) > 0:
             try:
-                # 如果启用了搜索增强，可以添加提示
+                # 搜索增强
                 search_hint = ""
                 if self.search_enabled and messages and messages[-1]["role"] == "user":
                     search_hint = await self._enhance_with_search(messages[-1]["content"])
-                    if search_hint:
-                        reasoning = f"{search_hint}\n\n{reasoning}"
+                if search_hint:
+                    reasoning = f"{search_hint}\n\n{reasoning}"
                 
-                # 针对工具的决策提示
+                # 工具决策
                 decision_prompt = self._format_tool_decision_prompt(original_question, reasoning, tools)
                 logger.debug(f"工具决策提示: {decision_prompt[:200]}...")
                 
-                # 向Claude发送决策请求
                 tool_decision_response = await self.claude_client.chat(
                     messages=[{"role": "user", "content": decision_prompt}],
                     model=claude_model,
                     tools=tools,
                     tool_choice=tool_choice,
-                    model_arg=model_arg
+                    temperature=model_arg[0],
+                    top_p=model_arg[1]
                 )
                 
-                # 如果Claude决定使用工具，返回工具调用响应
+                # 处理工具调用决策
                 if "tool_calls" in tool_decision_response:
                     tool_calls = tool_decision_response.get("tool_calls", [])
                     has_tool_decision = True
                     logger.info(f"Claude决定使用工具: {len(tool_calls)}个工具调用")
                     
-                    # 构造OpenAI格式的响应
+                    # 构造工具调用响应
                     response = {
-                        "id": f"chatcmpl-{uuid.uuid4()}",
+                        "id": chat_id,
                         "object": "chat.completion",
-                        "created": int(time.time()),
-                        "model": kwargs.get("model", "deepclaude"),
+                        "created": created_time,
+                        "model": model,
                         "choices": [{
                             "index": 0,
                             "message": {
@@ -712,45 +549,50 @@ class DeepClaude:
                             "finish_reason": "tool_calls"
                         }]
                     }
-                    
-                    return response
+                    yield f"data: {json.dumps(response, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
+                    return
             except Exception as tool_e:
-                logger.error(f"工具调用流程失败: {tool_e}")
-                # 如果工具调用失败，回退到普通回答
+                logger.error(f"工具调用流程失败: {tool_e}", exc_info=True)
         
-        # 如果没有工具调用或决策不使用工具，生成普通回答
+        # 生成普通回答
         if not has_tool_decision:
-            # 构造 Claude 的输入消息
-            combined_content = f"""
-这是我自己基于问题的思考过程:\n{reasoning}\n\n
-上面是我自己的思考过程不一定完全正确请借鉴思考过程和期中你也认为正确的部分（1000% 权重）
-，现在请给出详细和细致的答案，不要省略步骤和步骤细节
-，要分解原题确保你理解了原题的每个部分，也要掌握整体意思
-，最佳质量（1000% 权重），最详细解答（1000% 权重），不要回答太简单让我能参考一步步应用（1000% 权重）:"""
-            
+            # 构建最终提示
+            combined_content = f"""请根据用户的问题和思考过程提供最佳回答:
+
+用户问题: {original_question}
+
+思考过程: 
+{reasoning}
+
+要求:
+1. 直接回答问题，不要说"根据思考过程"之类的引用
+2. 以清晰、准确、有帮助的方式回答
+3. 如果思考过程中有不确定性，要明确指出
+4. 使用适当的语气和结构
+5. 不要重复或解释思考过程"""
+
+            # 发送最终提示到Claude
             claude_messages = [{"role": "user", "content": combined_content}]
-            
-            # 3. 获取 Claude 回答
             logger.info("正在获取 Claude 回答...")
+            
             try:
+                # 获取完整回答
                 full_content = ""
                 async for content_type, content in self.claude_client.stream_chat(
                     messages=claude_messages,
-                    model_arg=model_arg,
                     model=claude_model,
+                    temperature=model_arg[0],
+                    top_p=model_arg[1],
                     stream=False
                 ):
                     if content_type in ["answer", "content"]:
                         logger.debug(f"获取到 Claude 回答: {content}")
                         full_content += content
                 
-                # 保存AI回答到数据库
+                # 保存到数据库（如果启用）
                 if self.save_to_db and self.current_conversation_id:
                     try:
-                        # 估算token数量
                         tokens = len(reasoning.split()) + len(full_content.split())
-                        
-                        # 保存AI回答
                         self.db_ops.add_conversation_history(
                             conversation_id=self.current_conversation_id,
                             role="ai",
@@ -763,12 +605,12 @@ class DeepClaude:
                     except Exception as db_e:
                         logger.error(f"保存AI回答数据失败: {db_e}")
                 
-                # 返回OpenAI格式的响应
+                # 构造完整响应
                 response = {
-                    "id": f"chatcmpl-{uuid.uuid4()}",
+                    "id": chat_id,
                     "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": kwargs.get("model", "deepclaude"),
+                    "created": created_time,
+                    "model": model,
                     "choices": [{
                         "index": 0,
                         "message": {
@@ -779,10 +621,27 @@ class DeepClaude:
                     }]
                 }
                 
-                return response
+                yield f"data: {json.dumps(response, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
+                return
             except Exception as e:
                 logger.error(f"获取 Claude 回答失败: {e}")
-                raise
+                error_message = await self._handle_api_error(e)
+                result = {
+                    "id": chat_id,
+                    "object": "chat.completion",
+                    "created": created_time,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": f"处理请求时出错: {error_message}"
+                        },
+                        "finish_reason": "error"
+                    }]
+                }
+                yield f"data: {json.dumps(result, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
+                return
 
     async def _get_reasoning_content(self, messages: list, model: str, **kwargs) -> str:
         """获取推理内容
@@ -1117,21 +976,26 @@ class DeepClaude:
 
     # 搜索增强函数
     async def _enhance_with_search(self, query: str) -> str:
-        """使用搜索增强查询，获取最新信息
-        注意：实际搜索操作应由Dify执行，这里仅返回提示文本
+        """通用搜索增强函数，不包含特定模式匹配和特定工具假设
         
         Args:
             query: 用户查询内容
             
         Returns:
-            str: 搜索结果提示文本
+            str: 搜索增强提示，不含具体搜索结果
         """
         if not self.search_enabled:
             logger.info("搜索增强功能未启用")
             return ""
         
-        logger.info(f"建议使用搜索增强查询: {query}")
-        return "建议使用搜索工具获取最新信息。"
+        logger.info(f"考虑为查询提供搜索增强: {query}")
+        
+        # 不再进行硬编码的模式匹配，而是由工具调用机制决定是否使用搜索
+        # 返回一个通用提示，提示模型考虑使用搜索工具
+        hint = "此问题可能涉及实时信息，可以考虑使用搜索工具获取最新数据。"
+        
+        logger.info("已为查询添加搜索增强提示")
+        return hint
     
     async def _handle_tool_results(self, original_question: str, reasoning: str, 
                                    tool_calls: List[Dict], tool_results: List[Dict], **kwargs) -> str:
@@ -1152,9 +1016,20 @@ class DeepClaude:
         # 构建工具调用及结果的详细描述
         tools_info = ""
         for i, (tool_call, tool_result) in enumerate(zip(tool_calls, tool_results), 1):
-            func = tool_call.get("function", {})
-            tool_name = func.get("name", "未知工具")
-            tool_args = func.get("arguments", "{}")
+            # 通用提取工具名称和参数，支持多种格式
+            tool_name = "未知工具"
+            tool_args = "{}"
+            
+            # 从不同格式中提取工具名称和参数
+            if "function" in tool_call:
+                # OpenAI格式
+                func = tool_call.get("function", {})
+                tool_name = func.get("name", "未知工具")
+                tool_args = func.get("arguments", "{}")
+            elif "name" in tool_call:
+                # Claude或其他格式
+                tool_name = tool_call.get("name", "未知工具")
+                tool_args = json.dumps(tool_call.get("input", tool_call.get("arguments", {})), ensure_ascii=False)
             
             # 尝试解析参数为更可读的格式
             try:
@@ -1163,8 +1038,17 @@ class DeepClaude:
             except:
                 args_str = str(tool_args)
                 
-            # 处理结果
-            result_content = tool_result.get("content", "")
+            # 通用提取工具结果
+            result_content = ""
+            if isinstance(tool_result, dict):
+                # 尝试多种可能的字段名
+                result_content = (tool_result.get("content") or 
+                                 tool_result.get("result") or 
+                                 tool_result.get("output") or 
+                                 tool_result.get("response") or
+                                 json.dumps(tool_result, ensure_ascii=False))
+            else:
+                result_content = str(tool_result)
             
             tools_info += f"""
 工具 {i}: {tool_name}
@@ -1192,23 +1076,41 @@ class DeepClaude:
 3. 使用清晰、易懂的语言
 4. 如果工具结果不完整或有错误，要说明情况
 5. 回答要有逻辑性和连贯性
-6. 必要时可以结合多个工具的结果"""
-        
+6. 必要时可以结合多个工具的结果
+7. 不要解释推理过程，直接给出基于工具结果的答案
+8. 不要提及您正在使用工具，就像这些信息是您本身知道的一样
+"""
+
         logger.info("向Claude发送工具结果提示生成最终回答")
-        
-        # 向Claude发送请求生成最终回答
-        response = await self.claude_client.chat(
-            messages=[{"role": "user", "content": prompt}],
-            **self._prepare_answerer_kwargs(kwargs)
-        )
-        
-        if "choices" in response and response["choices"]:
-            answer = response["choices"][0]["message"]["content"]
-            logger.info(f"生成最终回答成功: {answer[:100]}...")
-            return answer
-        else:
-            logger.warning("生成最终回答失败")
-            return "抱歉，无法处理工具调用结果。"
+        try:
+            # 将工具结果也添加到提示消息中，以便Claude能够充分利用工具返回的信息
+            messages = [
+                {"role": "user", "content": prompt}
+            ]
+            
+            # 使用Claude生成最终回答
+            response = await self.claude_client.chat(
+                messages=messages,
+                model=os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'),
+                temperature=kwargs.get('temperature', 0.7),
+                top_p=kwargs.get('top_p', 0.9)
+            )
+            
+            # 提取并返回回答内容
+            if "content" in response:
+                answer = response.get("content", "")
+                logger.info(f"生成最终回答成功(Claude格式): {answer[:100]}...")
+                return answer
+            elif "choices" in response and response["choices"]:
+                answer = response["choices"][0].get("message", {}).get("content", "")
+                logger.info(f"生成最终回答成功(OpenAI格式): {answer[:100]}...")
+                return answer
+            else:
+                logger.error(f"未找到回答内容，响应结构: {list(response.keys())}")
+                return "抱歉，处理工具结果时出现错误，无法生成回答。"
+        except Exception as e:
+            logger.error(f"处理工具结果失败: {e}", exc_info=True)
+            return f"抱歉，处理工具结果时出现错误: {str(e)}"
 
     def _format_tool_decision_prompt(self, original_question: str, reasoning: str, tools: List[Dict]) -> str:
         """格式化工具决策提示，用于Claude判断是否需要使用工具
@@ -1225,11 +1127,10 @@ class DeepClaude:
         tools_description = ""
         for i, tool in enumerate(tools, 1):
             if "function" in tool:
+                # 处理OpenAI格式工具
                 function = tool["function"]
                 name = function.get("name", "未命名工具")
                 description = function.get("description", "无描述")
-                
-                # 提取参数信息
                 parameters = function.get("parameters", {})
                 required = parameters.get("required", [])
                 properties = parameters.get("properties", {})
@@ -1239,50 +1140,148 @@ class DeepClaude:
                     is_required = "必填" if param_name in required else "可选"
                     param_type = param_info.get("type", "未知类型")
                     param_description = param_info.get("description", "无描述")
-                    param_desc += f"  - {param_name} ({param_type}, {is_required}): {param_description}\n"
+                    enum_values = param_info.get("enum", [])
+                    
+                    enum_desc = ""
+                    if enum_values:
+                        enum_desc = f"，可选值: {', '.join([str(v) for v in enum_values])}"
+                        
+                    param_desc += f"  - {param_name} ({param_type}, {is_required}): {param_description}{enum_desc}\n"
                 
                 tools_description += f"{i}. 工具名称: {name}\n   描述: {description}\n   参数:\n{param_desc}\n"
+            # 处理Claude格式的自定义工具（使用custom字段）
+            elif "name" in tool and "custom" in tool:
+                name = tool.get("name", "未命名工具")
+                description = tool.get("description", "无描述")
+                custom = tool.get("custom", {})
+                
+                # 处理input_schema
+                if "input_schema" in custom:
+                    input_schema = custom["input_schema"]
+                    required = input_schema.get("required", [])
+                    properties = input_schema.get("properties", {})
+                else:
+                    # 兼容直接在custom下的属性
+                    required = custom.get("required", [])
+                    properties = custom.get("properties", {})
+                
+                param_desc = ""
+                for param_name, param_info in properties.items():
+                    is_required = "必填" if param_name in required else "可选"
+                    param_type = param_info.get("type", "未知类型")
+                    param_description = param_info.get("description", "无描述")
+                    enum_values = param_info.get("enum", [])
+                    
+                    enum_desc = ""
+                    if enum_values:
+                        enum_desc = f"，可选值: {', '.join([str(v) for v in enum_values])}"
+                        
+                    param_desc += f"  - {param_name} ({param_type}, {is_required}): {param_description}{enum_desc}\n"
+                
+                tools_description += f"{i}. 工具名称: {name}\n   描述: {description}\n   参数:\n{param_desc}\n"
+            elif "type" in tool and tool["type"] == "custom":
+                # 处理Claude格式工具
+                name = tool.get("name", "未命名工具")
+                description = tool.get("description", "无描述")
+                
+                # 尝试解析schema
+                tool_schema = tool.get("tool_schema", {})
+                required = tool_schema.get("required", [])
+                properties = tool_schema.get("properties", {})
+                
+                param_desc = ""
+                for param_name, param_info in properties.items():
+                    is_required = "必填" if param_name in required else "可选"
+                    param_type = param_info.get("type", "未知类型")
+                    param_description = param_info.get("description", "无描述")
+                    enum_values = param_info.get("enum", [])
+                    
+                    enum_desc = ""
+                    if enum_values:
+                        enum_desc = f"，可选值: {', '.join([str(v) for v in enum_values])}"
+                        
+                    param_desc += f"  - {param_name} ({param_type}, {is_required}): {param_description}{enum_desc}\n"
+                
+                tools_description += f"{i}. 工具名称: {name}\n   描述: {description}\n   参数:\n{param_desc}\n"
+            elif "name" in tool and "parameters" in tool:
+                # 处理简化格式工具
+                name = tool.get("name", "未命名工具")
+                description = tool.get("description", "无描述")
+                parameters = tool.get("parameters", {})
+                required = parameters.get("required", [])
+                properties = parameters.get("properties", {})
+                
+                param_desc = ""
+                for param_name, param_info in properties.items():
+                    is_required = "必填" if param_name in required else "可选"
+                    param_type = param_info.get("type", "未知类型") 
+                    param_description = param_info.get("description", "无描述")
+                    enum_values = param_info.get("enum", [])
+                    
+                    enum_desc = ""
+                    if enum_values:
+                        enum_desc = f"，可选值: {', '.join([str(v) for v in enum_values])}"
+                        
+                    param_desc += f"  - {param_name} ({param_type}, {is_required}): {param_description}{enum_desc}\n"
+                
+                tools_description += f"{i}. 工具名称: {name}\n   描述: {description}\n   参数:\n{param_desc}\n"
+            # 处理Claude格式的自定义工具（使用input_schema）
+            elif "name" in tool and "input_schema" in tool:
+                name = tool.get("name", "未命名工具")
+                description = tool.get("description", "无描述")
+                input_schema = tool.get("input_schema", {})
+                required = input_schema.get("required", [])
+                properties = input_schema.get("properties", {})
+                
+                param_desc = ""
+                for param_name, param_info in properties.items():
+                    is_required = "必填" if param_name in required else "可选"
+                    param_type = param_info.get("type", "未知类型")
+                    param_description = param_info.get("description", "无描述")
+                    enum_values = param_info.get("enum", [])
+                    
+                    enum_desc = ""
+                    if enum_values:
+                        enum_desc = f"，可选值: {', '.join([str(v) for v in enum_values])}"
+                        
+                    param_desc += f"  - {param_name} ({param_type}, {is_required}): {param_description}{enum_desc}\n"
+                    
+                tools_description += f"{i}. 工具名称: {name}\n   描述: {description}\n   参数:\n{param_desc}\n"
         
-        # 构造决策提示
-        prompt = f"""你是一个工具调用决策专家。请分析用户问题和推理内容，判断是否需要使用工具获取额外信息。
+        # 构建完整提示
+        prompt = f"""作为一个专业的AI助手，请分析用户问题和我的思考过程，决定是否需要使用工具来完成回答。
 
 用户问题: {original_question}
 
-推理内容:
+思考过程: 
 {reasoning}
 
-可用工具:
+可用工具列表:
 {tools_description}
 
-判断标准:
-1. 如果问题需要实时数据（如天气、搜索等），必须使用相应工具
-2. 如果问题是关于常识或可以通过推理解决，则不需要工具
-3. 如果推理内容已提供足够信息，则不需要工具
+分析要点:
+1. 如果问题需要实时或最新信息(例如天气、股票、新闻等)，应使用工具获取
+2. 如果问题需要检索特定数据或执行计算，应使用工具
+3. 如果问题是一般性知识或推理，不需要使用工具
+4. 如果思考过程已包含足够信息回答问题，不需要使用工具
 
-如果需要使用工具，请直接返回工具调用请求，格式如下：
-{{
-  "tool_calls": [
-    {{
-      "id": "call_xxxxx",  // 8位唯一ID
-      "type": "function",
-      "function": {{
-        "name": "工具名称",
-        "arguments": {{
-          // 具体参数
-        }}
-      }}
-    }}
-  ]
-}}
+请仔细判断是否使用工具，并给出符合以下格式的回复:
 
-注意事项:
-1. 只在确实需要额外信息时才使用工具
-2. 参数值必须是具体的值，不要使用占位符
-3. 必须提供所有必填参数
-4. 参数值要符合实际场景，如城市名、日期等
-5. 工具调用ID必须是唯一的8位字符串
-6. 返回的必须是有效的JSON格式"""
-        
+如果决定使用工具，请提供一个有效的工具调用JSON:
+```json
+{
+  "name": "工具名称",
+  "arguments": {
+    "参数1": "值1",
+    "参数2": "值2"
+  }
+}
+```
+
+如果不需要使用工具，只需直接回复: "不需要使用工具"
+
+请注意，你的回复必须是一个有效的JSON对象(如果使用工具)或纯文本短语(如果不使用工具)。不要添加任何解释或评论。"""
+
         logger.info(f"生成工具决策提示 - 问题: '{original_question[:30]}...'")
         return prompt
 
@@ -1316,6 +1315,7 @@ class DeepClaude:
                     function_args = "{}"
             
             # 构造标准的OpenAI API响应格式
+            # 注意：OpenAI最新规范要求tool_calls作为一个完整的数组
             response = {
                 "id": kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}"),
                 "object": "chat.completion.chunk",
@@ -1344,10 +1344,8 @@ class DeepClaude:
             
             logger.info(f"工具调用响应格式化完成 - 工具: {function_name}, ID: {tool_call_id}")
             return f"data: {json.dumps(response, ensure_ascii=False)}\n\n".encode('utf-8')
-            
         except Exception as e:
-            logger.error(f"工具调用响应格式化失败: {e}")
-            # 返回一个错误响应
+            logger.error(f"工具调用响应格式化失败: {e}", exc_info=True)
             error_response = {
                 "id": kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}"),
                 "object": "chat.completion.chunk",
@@ -1426,64 +1424,8 @@ class DeepClaude:
             }
             return f"data: {json.dumps(error_response, ensure_ascii=False)}\n\n".encode('utf-8')
 
-    def _validate_tool(self, tool: Dict) -> Tuple[bool, str, Optional[Dict]]:
-        """验证工具格式并尝试修复
-        
-        Args:
-            tool: 工具配置字典
-            
-        Returns:
-            Tuple[bool, str, Optional[Dict]]: 
-                - 是否有效
-                - 错误信息
-                - 修复后的工具配置（如果可以修复）
-        """
-        if not isinstance(tool, dict):
-            return False, f"工具必须是字典格式，当前类型: {type(tool)}", None
-            
-        # 检查必要字段
-        if "function" not in tool and "type" not in tool:
-            return False, "工具缺少必要字段 'function' 或 'type'", None
-            
-        # 如果是 type 格式，尝试转换为 function 格式
-        if "type" in tool and tool["type"] in ["function", "tool"]:
-            function_field = "function" if tool["type"] == "function" else "parameters"
-            if function_field in tool:
-                tool = {
-                    "function": tool[function_field]
-                }
-                
-        # 验证 function 字段
-        function = tool.get("function", {})
-        if not isinstance(function, dict):
-            return False, f"function 必须是字典格式，当前类型: {type(function)}", None
-            
-        # 检查必要的 function 字段
-        if "name" not in function:
-            return False, "function 缺少必要字段 'name'", None
-            
-        # 验证参数格式
-        parameters = function.get("parameters", {})
-        if not isinstance(parameters, dict):
-            return False, f"parameters 必须是字典格式，当前类型: {type(parameters)}", None
-            
-        # 尝试修复常见问题
-        fixed_tool = {
-            "function": {
-                "name": function.get("name", ""),
-                "description": function.get("description", ""),
-                "parameters": {
-                    "type": parameters.get("type", "object"),
-                    "properties": parameters.get("properties", {}),
-                    "required": parameters.get("required", [])
-                }
-            }
-        }
-        
-        return True, "", fixed_tool
-        
     def _validate_and_convert_tools(self, tools: List[Dict], target_format: str = 'claude-3') -> List[Dict]:
-        """验证并转换工具列表
+        """验证并转换工具列表，支持多种格式转换
         
         Args:
             tools: 原始工具列表
@@ -1494,33 +1436,328 @@ class DeepClaude:
         """
         if not tools:
             return []
-            
+        
         valid_tools = []
-        for tool in tools:
-            # 验证工具格式
-            is_valid, error_msg, fixed_tool = self._validate_tool(tool)
-            if not is_valid:
-                logger.warning(f"工具验证失败: {error_msg}")
+        for i, tool in enumerate(tools):
+            # 基本格式检查 
+            if not isinstance(tool, dict):
+                logger.warning(f"工具格式错误: {tool}")
+                continue
+            
+            # 处理已经是Claude格式的工具
+            if "type" in tool and tool["type"] in ["custom", "bash_20250124", "text_editor_20250124"]:
+                # 确保工具没有custom字段，这是一个常见错误
+                if "custom" in tool:
+                    logger.warning(f"检测到工具中的custom字段，这不符合Claude API规范，正在移除: {tool.get('name', '未命名工具')}")
+                    # 创建工具的副本避免修改原对象
+                    fixed_tool = tool.copy()
+                    fixed_tool.pop("custom", None)
+                    valid_tools.append(fixed_tool)
+                else:
+                    valid_tools.append(tool)
+                logger.info(f"检测到已是Claude格式的工具: {tool.get('name', '未命名工具')}")
                 continue
                 
-            tool_to_use = fixed_tool or tool
-            
-            # 检查工具是否在支持列表中
-            func = tool_to_use.get("function", {})
-            if func.get("name") in self.supported_tools:
-                # 转换为目标格式
-                format_config = self.tool_format_mapping.get(target_format)
-                if format_config:
-                    converted_tool = {
-                        'type': format_config['type'],
-                        format_config['function_field']: func
+            # 处理OpenAI格式的工具
+            if "function" in tool:
+                if target_format == 'claude-3':
+                    function_data = tool["function"]
+                    name = function_data.get("name", "未命名工具")
+                    description = function_data.get("description", "")
+                    parameters = function_data.get("parameters", {})
+                    
+                    # 创建Claude格式的自定义工具
+                    claude_tool = {
+                        "type": "custom",
+                        "name": name,
+                        "description": description,
+                        "tool_schema": parameters
                     }
-                    valid_tools.append(converted_tool)
-                    logger.info(f"工具 {func.get('name')} 验证成功并转换为 {target_format} 格式")
+                    logger.info(f"将OpenAI格式工具 '{name}' 转换为Claude custom格式")
+                    valid_tools.append(claude_tool)
                 else:
-                    valid_tools.append(tool_to_use)
-                    logger.info(f"工具 {func.get('name')} 验证成功，保持原始格式")
-            else:
-                logger.warning(f"工具 {func.get('name')} 不在支持列表中")
+                    # 保持OpenAI格式，确保格式正确
+                    # 确保有type字段
+                    if "type" not in tool:
+                        tool = {"type": "function", "function": tool["function"]}
+                    valid_tools.append(tool)
+                    logger.info(f"保持OpenAI格式工具: {tool['function'].get('name', '未命名工具')}")
+                continue
+                
+            # 处理Dify格式的工具 (可能用name和api_type字段)
+            if "name" in tool and "api_type" in tool:
+                logger.info(f"检测到Dify格式工具: {tool.get('name', '未命名工具')}")
+                if target_format == 'claude-3':
+                    # 尝试从Dify格式转换为Claude格式
+                    dify_tool = {
+                        "type": "custom",
+                        "name": tool.get("name", "未命名工具"),
+                        "description": tool.get("description", ""),
+                        "tool_schema": tool.get("parameters", {})
+                    }
+                    valid_tools.append(dify_tool)
+                    logger.info(f"已将Dify工具 '{tool.get('name', '未命名工具')}' 转换为Claude格式")
+                else:
+                    # 转换为OpenAI格式
+                    openai_tool = {
+                        "type": "function",
+                        "function": {
+                            "name": tool.get("name", "未命名工具"),
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get("parameters", {})
+                        }
+                    }
+                    valid_tools.append(openai_tool)
+                    logger.info(f"已将Dify工具 '{tool.get('name', '未命名工具')}' 转换为OpenAI格式")
+                continue
+                
+            # 处理简化格式工具 (仅有name和parameters)
+            if "name" in tool and "parameters" in tool:
+                logger.info(f"检测到简化格式工具: {tool.get('name', '未命名工具')}")
+                if target_format == 'claude-3':
+                    simple_tool = {
+                        "type": "custom",
+                        "name": tool.get("name", "未命名工具"),
+                        "description": tool.get("description", ""),
+                        "tool_schema": tool.get("parameters", {})
+                    }
+                    valid_tools.append(simple_tool)
+                    logger.info(f"已将简化格式工具转为Claude格式: {tool.get('name', '未命名工具')}")
+                else:
+                    openai_tool = {
+                        "type": "function",
+                        "function": {
+                            "name": tool.get("name", "未命名工具"),
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get("parameters", {})
+                        }
+                    }
+                    valid_tools.append(openai_tool)
+                    logger.info(f"已将简化格式工具转为OpenAI格式: {tool.get('name', '未命名工具')}")
+                continue
+                
+            # 处理其他可能的变体格式 (尝试提取关键字段)
+            if set(["name", "description"]).issubset(set(tool.keys())):
+                logger.info(f"检测到可能的变体格式工具: {tool.get('name', '未命名工具')}")
+                
+                # 尝试从各种可能的字段中提取参数
+                parameters = tool.get("parameters", 
+                            tool.get("schema", 
+                            tool.get("parameter_schema", 
+                            tool.get("tool_schema", {}))))
+                
+                if target_format == 'claude-3':
+                    variant_tool = {
+                        "type": "custom",
+                        "name": tool.get("name", "未命名工具"),
+                        "description": tool.get("description", ""),
+                        "tool_schema": parameters
+                    }
+                    valid_tools.append(variant_tool)
+                    logger.info(f"已将变体格式工具转为Claude格式: {tool.get('name', '未命名工具')}")
+                else:
+                    openai_tool = {
+                        "type": "function",
+                        "function": {
+                            "name": tool.get("name", "未命名工具"),
+                            "description": tool.get("description", ""),
+                            "parameters": parameters
+                        }
+                    }
+                    valid_tools.append(openai_tool)
+                    logger.info(f"已将变体格式工具转为OpenAI格式: {tool.get('name', '未命名工具')}")
+                continue
+                
+            logger.warning(f"工具格式无法识别: {json.dumps(tool, ensure_ascii=False)[:100]}...")
+        
+        # 日志记录转换结果
+        logger.info(f"工具验证和转换完成，原有 {len(tools)} 个工具，有效 {len(valid_tools)} 个工具")
+        if valid_tools:
+            for i, tool in enumerate(valid_tools):
+                if "type" in tool and tool["type"] == "custom":
+                    logger.debug(f"有效工具[{i}]: {tool.get('name', '未命名工具')} (Claude格式)")
+                else:
+                    logger.debug(f"有效工具[{i}]: {tool.get('name', tool.get('function', {}).get('name', '未命名工具'))} (OpenAI格式)")
                 
         return valid_tools
+
+    def _format_claude_prompt(self, original_question: str, reasoning: str) -> str:
+        """格式化给Claude的提示词"""
+        return f"""
+原始问题:
+{original_question}
+
+思考过程:
+{reasoning}
+
+请基于以上思考过程和原始问题,给出详细的答案。要求:
+1. 分步骤详细解答
+2. 确保理解问题的每个部分
+3. 给出完整的解决方案
+4. 如果思考过程有错误或不完整，请指出并补充正确的解答
+5. 保持回答的专业性和准确性
+"""
+
+    async def chat_completions_without_stream(
+        self,
+        messages: list,
+        model_arg: tuple[float, float, float, float],
+        tools: list = None,
+        tool_choice = "auto",
+        deepseek_model: str = "deepseek-reasoner",
+        claude_model: str = os.getenv('CLAUDE_MODEL', 'claude-3-7-sonnet-20250219'),
+        **kwargs
+    ) -> dict:
+        """处理非流式请求，支持工具调用
+        
+        Args:
+            messages: 对话消息列表
+            model_arg: 推理模型参数元组 (temperature, top_p, presence_penalty, frequency_penalty)
+            tools: 工具列表
+            tool_choice: 工具选择策略
+            deepseek_model: DeepSeek推理模型
+            claude_model: Claude回答模型
+            **kwargs: 其他参数
+            
+        Returns:
+            dict: 完整的响应数据
+        """
+        logger.info("开始处理非流式请求...")
+        logger.debug(f"输入消息: {messages}")
+        
+        # 配置直接透传模式
+        direct_tool_pass = os.getenv('CLAUDE_DIRECT_TOOL_PASS', 'true').lower() == 'true'
+        
+        # 构造基本响应模板
+        chat_id = kwargs.get("chat_id", f"chatcmpl-{uuid.uuid4()}")
+        created_time = kwargs.get("created_time", int(time.time()))
+        model = kwargs.get("model", "deepclaude")
+        
+        # 如果启用直接透传且有工具，直接使用Claude处理
+        if direct_tool_pass and tools and len(tools) > 0:
+            logger.info(f"直接透传模式(非流式): 包含 {len(tools)} 个工具")
+            
+            # 记录工具选择策略
+            if isinstance(tool_choice, str):
+                logger.info(f"工具选择策略: {tool_choice}")
+            elif isinstance(tool_choice, dict):
+                logger.info(f"工具选择策略: {json.dumps(tool_choice, ensure_ascii=False)}")
+            else:
+                logger.info(f"工具选择策略: {tool_choice}")
+            
+            # 转换工具格式
+            converted_tools = self._validate_and_convert_tools(tools, target_format='claude-3')
+            
+            if not converted_tools:
+                logger.warning("没有有效的工具可用，将作为普通对话处理")
+                return {
+                    "id": chat_id,
+                    "object": "chat.completion",
+                    "created": created_time,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "没有找到有效的工具定义，将作为普通对话处理。"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }
+            
+            logger.info(f"直接使用Claude模型: {claude_model}")
+            
+            # 准备Claude调用参数
+            claude_kwargs = {
+                "messages": messages,
+                "model": claude_model,
+                "temperature": kwargs.get("temperature", 0.7),
+                "top_p": kwargs.get("top_p", 0.9),
+                "tools": converted_tools
+            }
+            
+            # 工具选择策略转换
+            if isinstance(tool_choice, str):
+                if tool_choice == "auto":
+                    claude_kwargs["tool_choice"] = {"type": "auto"}
+                elif tool_choice == "none":
+                    # Claude不支持none，将使用空工具列表
+                    logger.info("检测到'none'工具选择策略，将不使用工具")
+                    claude_kwargs.pop("tools")
+            elif isinstance(tool_choice, dict):
+                if tool_choice.get("type") == "function" and "function" in tool_choice:
+                    # OpenAI格式转为Claude格式
+                    func_name = tool_choice["function"].get("name")
+                    if func_name:
+                        logger.info(f"指定使用工具: {func_name}")
+                        claude_kwargs["tool_choice"] = {
+                            "type": "tool",
+                            "name": func_name
+                        }
+                else:
+                    # 已是Claude格式或其他格式
+                    claude_kwargs["tool_choice"] = tool_choice
+            
+            try:
+                # 非流式调用Claude API
+                response = await self.claude_client.chat(**claude_kwargs)
+                
+                # 处理工具调用响应
+                if "tool_calls" in response:
+                    tool_calls = response["tool_calls"]
+                    logger.info(f"Claude返回了 {len(tool_calls)} 个工具调用")
+                    
+                    # 构造标准的OpenAI格式响应
+                    result = {
+                        "id": chat_id,
+                        "object": "chat.completion",
+                        "created": created_time,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": tool_calls
+                            },
+                            "finish_reason": "tool_calls"
+                        }],
+                        "usage": {
+                            "prompt_tokens": response.get("usage", {}).get("prompt_tokens", 0),
+                            "completion_tokens": response.get("usage", {}).get("completion_tokens", 0),
+                            "total_tokens": response.get("usage", {}).get("total_tokens", 0)
+                        }
+                    }
+                    return result
+                else:
+                    # 处理普通回答响应
+                    content = response.get("content", "")
+                    if not content and "choices" in response and response["choices"]:
+                        content = response["choices"][0].get("message", {}).get("content", "")
+                        
+                    result = {
+                        "id": chat_id,
+                        "object": "chat.completion",
+                        "created": created_time,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": content
+                            },
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {
+                            "prompt_tokens": response.get("usage", {}).get("prompt_tokens", 0),
+                            "completion_tokens": response.get("usage", {}).get("completion_tokens", 0),
+                            "total_tokens": response.get("usage", {}).get("total_tokens", 0)
+                        }
+                    }
+                    return result
+            except Exception as e:
+                logger.error(f"直接透传模式下API调用失败: {e}", exc_info=True)
+                # 此处选择回退到推理-回答模式，而不是立即返回错误
+                logger.info("将尝试使用推理-回答模式处理请求")
+        
+        # 剩余的代码保持不变...

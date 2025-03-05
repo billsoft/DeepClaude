@@ -1,0 +1,67 @@
+[2025-03-05 09:36:33] [INFO] [logger.py:90] 日志级别设置为: INFO
+[2025-03-05 09:36:33] [INFO] [main.py:17] 服务即将启动 - host: 0.0.0.0, port: 1124, reload: False
+[2025-03-05 09:36:34] [INFO] [auth.py:10] 当前工作目录: /Users/wanglei/code/DeepClaude
+[2025-03-05 09:36:34] [INFO] [auth.py:11] 尝试加载.env文件...
+[2025-03-05 09:36:34] [INFO] [auth.py:17] ALLOW_API_KEY环境变量状态: 已设置
+[2025-03-05 09:36:34] [INFO] [auth.py:24] Loaded API key starting with: Deep
+[2025-03-05 09:36:34] [INFO] [core.py:18] 初始化DeepClaude服务...
+[2025-03-05 09:36:34] [INFO] [claude_client.py:58] 初始化Claude客户端: provider=anthropic, url=https://claude.agentpt.com/v1/messages
+[2025-03-05 09:36:34] [INFO] [deepseek.py:35] 初始化DeepSeek推理提供者: provider=deepseek, url=https://api.deepseek.com/v1/chat/completions, mode=auto
+[2025-03-05 09:36:34] [INFO] [core.py:48] 数据库存储已禁用
+[2025-03-05 09:36:34] [INFO] [core.py:51] DeepClaude服务初始化完成
+[2025-03-05 09:36:34] [INFO] [main.py:171] 开始请求
+[2025-03-05 09:36:41] [INFO] [auth.py:56] API密钥验证通过
+[2025-03-05 09:36:41] [INFO] [main.py:240] 收到原始请求:
+[2025-03-05 09:36:41] [INFO] [main.py:241] 请求头: {'host': '192.168.100.182:1124', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'accept': 'application/json', 'content-type': 'application/json', 'user-agent': 'OpenAI/Python 1.64.0', 'x-stainless-lang': 'python', 'x-stainless-package-version': '1.64.0', 'x-stainless-os': 'Linux', 'x-stainless-arch': 'arm64', 'x-stainless-runtime': 'CPython', 'x-stainless-runtime-version': '3.12.3', 'authorization': 'Bearer DeepSYSAI', 'x-stainless-async': 'false', 'x-stainless-retry-count': '0', 'x-stainless-read-timeout': '300.0', 'content-length': '1850'}
+[2025-03-05 09:36:41] [INFO] [main.py:242] 请求体: {"messages": [{"role": "system", "content": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n"}, {"role": "user", "content": "沈阳天气"}], "model": "gpt-4o", "functions": [{"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "parameters": {"properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"], "type": "object"}}, {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "parameters": {"properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"], "type": "object"}}], "stream": true, "stream_options": {"include_usage": true}, "user": "2cdb8f37-7fdb-42f2-95d9-140769ef24f4"}
+[2025-03-05 09:36:41] [INFO] [main.py:253] 检测到 OpenAI 格式的 functions 定义，正在转换为 tools 格式
+[2025-03-05 09:36:41] [INFO] [main.py:271] 转换工具: tavily_search => {"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}
+[2025-03-05 09:36:41] [INFO] [main.py:271] 转换工具: tavily_extract => {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}
+[2025-03-05 09:36:41] [INFO] [main.py:273] 转换完成，共 2 个工具
+[2025-03-05 09:36:41] [INFO] [main.py:280] 收到工具调用请求，包含 2 个工具
+[2025-03-05 09:36:41] [INFO] [main.py:296] 工具选择策略: auto
+[2025-03-05 09:36:41] [INFO] [main.py:304] 使用流式响应处理请求
+[2025-03-05 09:36:41] [INFO] [core.py:62] 开始流式处理请求...
+[2025-03-05 09:36:41] [INFO] [core.py:70] 直接透传模式(流式): 包含 2 个工具
+[2025-03-05 09:36:41] [INFO] [core.py:81] 最终使用 2 个工具调用Claude
+[2025-03-05 09:36:41] [INFO] [core.py:96] 开始调用Claude流式接口...
+[2025-03-05 09:36:41] [INFO] [claude_client.py:311] 添加了 2 个验证通过的工具到请求
+[2025-03-05 09:36:41] [INFO] [claude_client.py:537] Claude API请求体: {"model": "claude-3-7-sonnet-20250219", "temperature": 0.7, "max_tokens": 8192, "messages": [{"role": "user", "content": "沈阳天气"}], "stream": true, "system": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n", "top_p": 0.9, "tools": [{"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}, {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}], "tool_choice": {"type": "auto"}}
+[2025-03-05 09:36:41] [INFO] [claude_client.py:542] 开始向Claude API发送请求: https://claude.agentpt.com/v1/messages (第1次尝试)
+[2025-03-05 09:36:43] [INFO] [claude_client.py:577] 成功连接到Claude API，开始处理SSE事件流
+[2025-03-05 09:36:43] [INFO] [claude_client.py:365] 开始处理Claude SSE事件流
+[2025-03-05 09:36:43] [ERROR] [claude_client.py:508] 处理SSE事件流时出错: 'async for' requires an object with __aiter__ method, got ClientResponse
+Traceback (most recent call last):
+  File "/Users/wanglei/code/DeepClaude/app/clients/claude_client.py", line 373, in _process_sse_events
+    async for line in event_stream:
+TypeError: 'async for' requires an object with __aiter__ method, got ClientResponse
+[2025-03-05 09:36:43] [WARNING] [claude_client.py:619] Claude API请求出错: not enough values to unpack (expected 2, got 1)，将在1秒后重试
+[2025-03-05 09:36:44] [INFO] [claude_client.py:311] 添加了 2 个验证通过的工具到请求
+[2025-03-05 09:36:44] [INFO] [claude_client.py:537] Claude API请求体: {"model": "claude-3-7-sonnet-20250219", "temperature": 0.7, "max_tokens": 8192, "messages": [{"role": "user", "content": "沈阳天气"}], "stream": true, "system": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n", "top_p": 0.9, "tools": [{"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}, {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}], "tool_choice": {"type": "auto"}}
+[2025-03-05 09:36:44] [INFO] [claude_client.py:542] 开始向Claude API发送请求: https://claude.agentpt.com/v1/messages (第2次尝试)
+[2025-03-05 09:36:45] [ERROR] [claude_client.py:562] Claude API错误 (502): <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+
+[2025-03-05 09:36:45] [WARNING] [claude_client.py:566] 检测到服务器错误 (502)，将在1秒后重试
+[2025-03-05 09:36:46] [INFO] [claude_client.py:311] 添加了 2 个验证通过的工具到请求
+[2025-03-05 09:36:46] [INFO] [claude_client.py:537] Claude API请求体: {"model": "claude-3-7-sonnet-20250219", "temperature": 0.7, "max_tokens": 8192, "messages": [{"role": "user", "content": "沈阳天气"}], "stream": true, "system": "始终使用中文沟通。\n阅读问题，能够深入理解问题，分析问题的每部分的含义，进行解释，也能整体把握问题的条件和隐藏条件\n然后细致详细解答(1000%权重)，最佳质量，最有责任的回答\n在回答复杂问题、编程问题、技术问题和有实时性要求的问题时要先调用工具中的搜索功能搜索网上的答案，调用搜索工具tavily\n（此要求权重500%)\n如果不知道当前日期可以先调用 tavily查询今天日期\n", "top_p": 0.9, "tools": [{"name": "tavily_search", "description": "A tool for search engine built specifically for AI agents (LLMs), delivering real-time, accurate, and factual results at speed.", "input_schema": {"type": "object", "properties": {"query": {"description": "The search query.", "type": "string"}}, "required": ["query"]}}, {"name": "tavily_extract", "description": "A tool for extracting raw content from web pages, designed for AI agents (LLMs).", "input_schema": {"type": "object", "properties": {"urls": {"description": "A comma-separated list of URLs to extract content from.", "type": "string"}}, "required": ["urls"]}}], "tool_choice": {"type": "auto"}}
+[2025-03-05 09:36:46] [INFO] [claude_client.py:542] 开始向Claude API发送请求: https://claude.agentpt.com/v1/messages (第3次尝试)
+[2025-03-05 09:36:47] [ERROR] [claude_client.py:562] Claude API错误 (502): <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+
+[2025-03-05 09:36:47] [ERROR] [core.py:424] 流式处理异常: tuple indices must be integers or slices, not str
+Traceback (most recent call last):
+  File "/Users/wanglei/code/DeepClaude/app/deepclaude/core.py", line 101, in chat_completions_with_stream
+    if "error" in chunk and chunk["error"]:
+                            ~~~~~^^^^^^^^^
+TypeError: tuple indices must be integers or slices, not str
